@@ -127,3 +127,47 @@ class TestParseJsonLine:
         assert result.sensor_status is not None
         assert result.sensor_status.soil_moisture == "ok"
         assert result.sensor_status.light_lux == "error"
+
+    def test_parse_serial_line_arduino_test_sketch_block(self):
+        """Streaming text lines from Arduino test sketches must be parsed into an ESP32Packet."""
+        from app.services.serial_manager import parse_serial_line
+
+        lines = [
+            "Probe 1 address: 28E00BBA000000CD",
+            "Probe 2 address: 286307B3000000CC",
+            "----- SENSOR READINGS -----",
+            "Air temperature: 30.40 C",
+            "Air humidity: 75.00 %",
+            "Light intensity: 73.33 lux",
+            "Moisture sensor 1 - A0 raw: 22046, voltage: 2.756 V",
+            "Moisture sensor 2 - A1 raw: 21893, voltage: 2.737 V",
+            "Soil temperature probe 1: 30.25 C",
+            "Soil temperature probe 2: 29.12 C",
+            "---------------------------",
+        ]
+
+        packet = None
+        for line in lines:
+            res = parse_serial_line(line)
+            if res:
+                packet = res
+
+        assert packet is not None
+        assert packet.shared.air_temperature == pytest.approx(30.40)
+        assert packet.shared.humidity == pytest.approx(75.00)
+        assert packet.shared.light_lux == pytest.approx(73.33)
+
+        assert "field_1" in packet.fields
+        assert "field_2" in packet.fields
+
+        f1 = packet.fields["field_1"]
+        assert f1.soil_moisture_raw == 22046
+        assert f1.soil_moisture_voltage == pytest.approx(2.756)
+        assert f1.soil_temperature == pytest.approx(30.25)
+        assert f1.ds18b20_address == "28E00BBA000000CD"
+
+        f2 = packet.fields["field_2"]
+        assert f2.soil_moisture_raw == 21893
+        assert f2.soil_moisture_voltage == pytest.approx(2.737)
+        assert f2.soil_temperature == pytest.approx(29.12)
+        assert f2.ds18b20_address == "286307B3000000CC"

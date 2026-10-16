@@ -1,5 +1,5 @@
 // =============================================================================
-// MARUDAM — Supabase Sensor Query Utilities
+// MARUDAM — Supabase Sensor Query Utilities (Two-Field Supported)
 // =============================================================================
 // These functions read sensor data from Supabase for the Next.js frontend.
 // Uses the public/publishable key — only public tables (sensor_readings,
@@ -12,9 +12,13 @@ import { createClient } from '@/lib/supabase/client';
 export interface SensorReading {
   id: string;
   device_id: string;
+  field_id?: string;
   timestamp: string;
   soil_moisture: number | null;
+  soil_moisture_raw?: number | null;
+  soil_moisture_voltage?: number | null;
   soil_temperature: number | null;
+  ds18b20_address?: string | null;
   soil_ph: number | null;
   soil_ec: number | null;
   air_temperature: number | null;
@@ -26,6 +30,7 @@ export interface SensorReading {
 export interface Anomaly {
   id: string;
   device_id: string;
+  field_id?: string;
   timestamp: string;
   sensor: string;
   observed_value: number | null;
@@ -49,32 +54,63 @@ export interface DeviceRow {
 // ─── Latest reading ───────────────────────────────────────────────────────────
 
 export async function fetchLatestReading(
-  deviceId: string
+  deviceId: string,
+  fieldId?: string
 ): Promise<SensorReading | null> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('sensor_readings')
     .select('*')
-    .eq('device_id', deviceId)
+    .eq('device_id', deviceId);
+
+  if (fieldId) {
+    query = query.eq('field_id', fieldId);
+  }
+
+  const { data, error } = await query
     .order('timestamp', { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
   if (error || !data) return null;
   return data as SensorReading;
+}
+
+export async function fetchLatestTwoFieldReadings(
+  deviceId: string
+): Promise<{ field_1: SensorReading | null; field_2: SensorReading | null }> {
+  const [f1, f2] = await Promise.all([
+    fetchLatestReading(deviceId, 'field_1'),
+    fetchLatestReading(deviceId, 'field_2'),
+  ]);
+
+  // Graceful fallback: If no field_id column or tagged rows yet,
+  // return generic latest reading as field_1
+  if (!f1 && !f2) {
+    const generic = await fetchLatestReading(deviceId);
+    return { field_1: generic, field_2: null };
+  }
+  return { field_1: f1, field_2: f2 };
 }
 
 // ─── Reading history ──────────────────────────────────────────────────────────
 
 export async function fetchReadingHistory(
   deviceId: string,
-  limit = 100
+  limit = 100,
+  fieldId?: string
 ): Promise<SensorReading[]> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('sensor_readings')
     .select('*')
-    .eq('device_id', deviceId)
+    .eq('device_id', deviceId);
+
+  if (fieldId) {
+    query = query.eq('field_id', fieldId);
+  }
+
+  const { data, error } = await query
     .order('timestamp', { ascending: false })
     .limit(limit);
 
@@ -86,13 +122,20 @@ export async function fetchReadingHistory(
 
 export async function fetchRecentAnomalies(
   deviceId: string,
-  limit = 20
+  limit = 20,
+  fieldId?: string
 ): Promise<Anomaly[]> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('anomalies')
     .select('*')
-    .eq('device_id', deviceId)
+    .eq('device_id', deviceId);
+
+  if (fieldId) {
+    query = query.eq('field_id', fieldId);
+  }
+
+  const { data, error } = await query
     .order('timestamp', { ascending: false })
     .limit(limit);
 
@@ -110,7 +153,7 @@ export async function fetchDeviceStatus(
     .from('devices')
     .select('*')
     .eq('device_id', deviceId)
-    .single();
+    .maybeSingle();
 
   if (error || !data) return null;
   return data as DeviceRow;

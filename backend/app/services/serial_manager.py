@@ -22,11 +22,12 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+import re
 import serial
 import serial.tools.list_ports
 
 from app.config import settings
-from app.models.sensor import ESP32Packet, SensorStatus
+from app.models.sensor import ESP32Packet, SensorStatus, FieldSoilData, SharedAtmosphericData
 from app.utils.logger import get_logger
 
 logger = get_logger("serial_manager")
@@ -151,90 +152,180 @@ def resolve_port() -> Optional[str]:
 
 # ─── JSON parsing ─────────────────────────────────────────────────────────────
 
-import re
-from app.config import settings
-
-_test_buffer = {}
-
-def parse_serial_line(raw_line: str) -> Optional[ESP32Packet]:
+def parse_json_line(raw_line: str) -> Optional[ESP32Packet]:
     """
-    Parse a raw serial line. Supports both JSON (production) and text-based test sketch.
-    Returns an ESP32Packet if a complete reading is formed.
+    Parse a raw serial line containing exactly one JSON object.
+    Rejects malformed JSON, empty lines, and non-JSON text banners.
+    Validates sensor values against physical limits and returns ESP32Packet.
     """
-    global _test_buffer
     line = raw_line.strip()
     if not line:
         return None
 
-    # 1. JSON Mode (Production)
-    if line.startswith("{"):
-        try:
-            data = json.loads(line)
-            return ESP32Packet(**data)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON from serial: {e} | raw: {line[:120]}")
-            return None
-        except Exception as e:
-            logger.error(f"Sensor validation failed: {e} | raw: {line[:120]}")
-            return None
+    # Ignore lines that do not start with a JSON object delimiter
+    if not line.startswith("{"):
+        logger.debug(f"Ignoring non-JSON serial line: {line[:80]}")
+        return None
 
-    # 2. Text Mode (Test Sketch)
     try:
-        if "Air Temperature:" in line:
-            match = re.search(r'Air Temperature:\s*([\d.]+)', line)
-            if match: _test_buffer['air_temperature'] = float(match.group(1))
-        elif "Humidity:" in line:
-            match = re.search(r'Humidity:\s*([\d.]+)', line)
-            if match: _test_buffer['humidity'] = float(match.group(1))
-        elif "Soil Temperature:" in line:
-            match = re.search(r'Soil Temperature:\s*([\d.]+)', line)
-            if match: _test_buffer['soil_temperature'] = float(match.group(1))
-        elif "Light:" in line:
-            match = re.search(r'Light:\s*([\d.]+)', line)
-            if match: _test_buffer['light_lux'] = float(match.group(1))
-        elif "Soil Moisture ADC Raw:" in line:
-            match = re.search(r'Soil Moisture ADC Raw:\s*([\d.]+)', line)
-            if match: 
-                # Convert ADC raw to a rough moisture percentage (assuming 22000 is ~dry, 10000 is wet)
-                # We'll just provide a dummy moisture if they didn't calibrate, or use a basic map.
-                # Actually, let's just output a default since the test sketch only gives ADC/Voltage.
-                # Let's map 22000 -> ~10%, 15000 -> ~80%
-                raw_adc = float(match.group(1))
-                moisture = max(0.0, min(100.0, 100.0 - ((raw_adc - 10000) / 120.0)))
-                _test_buffer['soil_moisture'] = round(moisture, 1)
-        elif "Soil Moisture Voltage:" in line:
-            # This is the last line of the test block!
-            if 'air_temperature' in _test_buffer:
-                packet = ESP32Packet(
-                    device_id=settings.device_id,
-                    soil_moisture=_test_buffer.get('soil_moisture', 45.0),
-                    soil_temperature=_test_buffer.get('soil_temperature', 25.0),
-                    air_temperature=_test_buffer.get('air_temperature', 25.0),
-                    humidity=_test_buffer.get('humidity', 50.0),
-                    light_lux=_test_buffer.get('light_lux', 1000.0)
-                )
-                _test_buffer.clear()
-                return packet
+        data = json.loads(line)
+        if not isinstance(data, dict):
+            logger.error("JSON payload is not a dictionary object")
+            return None
+        return ESP32Packet(**data)
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON from serial: {e} | raw: {line[:120]}")
+        return None
     except Exception as e:
-        logger.error(f"Test sketch parse error: {e}")
-    
+        logger.error(f"Sensor validation failed: {e} | raw: {line[:120]}")
+        return None
+
+
+# ─── Dual-Mode (JSON + Arduino Test Sketch) Serial Parsing ───────────────────
+
+_text_block_buffer: list[str] = []
+_discovered_probe_1: str = "28E00BBA000000CD"
+_discovered_probe_2: str = "286307B3000000CC"
+
+
+def parse_text_line(raw_line: str) -> Optional[ESP32Packet]:
+    """
+    Statefully process streaming text lines from Arduino test sketches.
+    Buffers lines between '----- SENSOR READINGS -----' and '---------------------------',
+    discovering 1-Wire addresses and building a validated two-field ESP32Packet.
+    """
+    global _text_block_buffer, _discovered_probe_1, _discovered_probe_2
+    line_clean = raw_line.strip()
+    if not line_clean:
+        return None
+
+    # Track probe discovery lines from bootup
+    if m := re.search(r'Probe 1 address:\s*([0-9A-Fa-f]+)', line_clean):
+        _discovered_probe_1 = m.group(1).upper()
+        logger.info(f"Discovered Probe 1 hardware address: {_discovered_probe_1}")
+        return None
+    if m := re.search(r'Probe 2 address:\s*([0-9A-Fa-f]+)', line_clean):
+        _discovered_probe_2 = m.group(1).upper()
+        logger.info(f"Discovered Probe 2 hardware address: {_discovered_probe_2}")
+        return None
+
+    if "----- SENSOR READINGS -----" in line_clean:
+        _text_block_buffer = []
+        return None
+
+    if _text_block_buffer is not None:
+        _text_block_buffer.append(line_clean)
+        # End of reading block reached
+        if "---------------------------" in line_clean or len(_text_block_buffer) >= 14:
+            text = "\n".join(_text_block_buffer)
+            _text_block_buffer = []
+
+            t_air = float(m.group(1)) if (m := re.search(r'Air temperature:\s*([\d\.\-]+)', text)) else None
+            rh    = float(m.group(1)) if (m := re.search(r'Air humidity:\s*([\d\.\-]+)', text)) else None
+            lux   = float(m.group(1)) if (m := re.search(r'Light intensity:\s*([\d\.\-]+)', text)) else None
+
+            m1_raw = int(m.group(1)) if (m := re.search(r'Moisture sensor 1 - A0 raw:\s*(\d+)', text)) else None
+            m1_v   = float(m.group(1)) if (m := re.search(r'Moisture sensor 1 - A0 raw:\s*\d+,\s*voltage:\s*([\d\.\-]+)', text)) else None
+            m2_raw = int(m.group(1)) if (m := re.search(r'Moisture sensor 2 - A1 raw:\s*(\d+)', text)) else None
+            m2_v   = float(m.group(1)) if (m := re.search(r'Moisture sensor 2 - A1 raw:\s*\d+,\s*voltage:\s*([\d\.\-]+)', text)) else None
+
+            t_s1 = float(m.group(1)) if (m := re.search(r'Soil temperature probe 1:\s*([\d\.\-]+)', text)) else None
+            t_s2 = float(m.group(1)) if (m := re.search(r'Soil temperature probe 2:\s*([\d\.\-]+)', text)) else None
+
+            if any(v is not None for v in [t_air, rh, lux, m1_raw, m2_raw, t_s1, t_s2]):
+                try:
+                    return ESP32Packet(
+                        device_id=settings.device_id,
+                        firmware_version="1.0.0-sketch",
+                        schema_version="2.0",
+                        shared=SharedAtmosphericData(air_temperature=t_air, humidity=rh, light_lux=lux),
+                        fields={
+                            "field_1": FieldSoilData(
+                                field_id="field_1",
+                                soil_moisture_raw=m1_raw,
+                                soil_moisture_voltage=m1_v,
+                                soil_temperature=t_s1,
+                                ds18b20_address=_discovered_probe_1,
+                            ),
+                            "field_2": FieldSoilData(
+                                field_id="field_2",
+                                soil_moisture_raw=m2_raw,
+                                soil_moisture_voltage=m2_v,
+                                soil_temperature=t_s2,
+                                ds18b20_address=_discovered_probe_2,
+                            ),
+                        },
+                        sensor_status={
+                            "dht22": "ok" if t_air is not None else "unavailable",
+                            "bh1750": "ok" if lux is not None else "unavailable",
+                            "ads1115": "ok" if m1_raw is not None or m2_raw is not None else "unavailable",
+                            "field_1_moisture": "ok" if m1_raw is not None else "unavailable",
+                            "field_1_temperature": "ok" if t_s1 is not None else "unavailable",
+                            "field_2_moisture": "ok" if m2_raw is not None else "unavailable",
+                            "field_2_temperature": "ok" if t_s2 is not None else "unavailable",
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Error building packet from text block: {e}")
+                    return None
     return None
+
+
+def parse_serial_line(raw_line: str) -> Optional[ESP32Packet]:
+    """
+    Parse a raw serial line.
+    Supports both:
+      1. Schema v2.0 JSON Lines (starts with '{')
+      2. Arduino IDE test sketch text blocks ('----- SENSOR READINGS -----')
+    """
+    line = raw_line.strip()
+    if not line:
+        return None
+
+    if line.startswith("{"):
+        return parse_json_line(line)
+
+    return parse_text_line(line)
 
 
 # ─── Mock sensor mode ─────────────────────────────────────────────────────────
 
 def _generate_mock_packet() -> ESP32Packet:
-    """Generate a realistic fake sensor packet for development without hardware."""
+    """Generate a realistic fake two-field sensor packet for development without hardware."""
+    from app.models.sensor import FieldSoilData, SharedAtmosphericData
     return ESP32Packet(
         device_id        = settings.device_id,
+        firmware_version = "2.0.0",
+        schema_version   = "2.0",
+        uptime_ms        = int(time.time() * 1000) % 10000000,
         timestamp        = None,
-        soil_moisture    = round(random.uniform(40.0, 75.0), 1),
-        soil_temperature = round(random.uniform(22.0, 32.0), 1),
-        soil_ph          = None,
-        soil_ec          = None,
-        air_temperature  = round(random.uniform(28.0, 38.0), 1),
-        humidity         = round(random.uniform(50.0, 80.0), 1),
-        light_lux        = round(random.uniform(1000.0, 80000.0), 0),
+        shared           = SharedAtmosphericData(
+            air_temperature = round(random.uniform(28.0, 36.0), 1),
+            humidity        = round(random.uniform(50.0, 75.0), 1),
+            light_lux       = round(random.uniform(5000.0, 65000.0), 0),
+        ),
+        fields           = {
+            "field_1": FieldSoilData(
+                field_id              = "field_1",
+                soil_moisture_raw     = random.randint(15000, 22000),
+                soil_moisture_voltage = round(random.uniform(1.8, 2.5), 3),
+                soil_moisture         = round(random.uniform(45.0, 70.0), 1),
+                soil_temperature      = round(random.uniform(24.0, 30.0), 1),
+                ds18b20_address       = "28FF641E8014029C",
+                status_moisture       = "ok",
+                status_temperature    = "ok",
+            ),
+            "field_2": FieldSoilData(
+                field_id              = "field_2",
+                soil_moisture_raw     = random.randint(16000, 23000),
+                soil_moisture_voltage = round(random.uniform(1.9, 2.6), 3),
+                soil_moisture         = round(random.uniform(40.0, 65.0), 1),
+                soil_temperature      = round(random.uniform(25.0, 31.0), 1),
+                ds18b20_address       = "28A472918014035D",
+                status_moisture       = "ok",
+                status_temperature    = "ok",
+            ),
+        },
         sensor_status    = SensorStatus(
             soil_moisture    = "ok",
             soil_temperature = "ok",
@@ -243,6 +334,9 @@ def _generate_mock_packet() -> ESP32Packet:
             air_temperature  = "ok",
             humidity         = "ok",
             light_lux        = "ok",
+            dht22            = "ok",
+            bh1750           = "ok",
+            ads1115          = "ok",
         ),
     )
 

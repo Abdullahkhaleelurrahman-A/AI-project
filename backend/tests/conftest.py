@@ -58,7 +58,13 @@ if "app.utils.logger" not in sys.modules:
 
 # ─── Stub supabase_service (needs credentials) ───────────────────────────────
 supa_stub = _mod("app.services.supabase_service")
-supa_stub.get_bounded_reading_history = MagicMock(return_value=[])
-supa_stub.upsert_adaptive_baseline    = MagicMock(return_value=True)
-supa_stub.load_adaptive_baselines     = MagicMock(return_value=[])
+supa_stub.get_bounded_reading_history   = MagicMock(return_value=[])
+supa_stub.upsert_adaptive_baseline      = MagicMock(return_value=True)
+supa_stub.load_adaptive_baselines       = MagicMock(return_value=[])
+supa_stub.upsert_anomaly                = MagicMock(return_value="mock-anomaly-id")
+supa_stub.upsert_reading                = MagicMock(return_value=True)
+supa_stub.get_latest_reading            = MagicMock(return_value=None)
+supa_stub.get_recent_anomalies          = MagicMock(return_value=[])
+supa_stub.get_latest_two_field_readings = MagicMock(return_value={"field_1": None, "field_2": None})
+supa_stub.get_client                    = MagicMock(return_value=None)
 sys.modules["app.services.supabase_service"] = supa_stub

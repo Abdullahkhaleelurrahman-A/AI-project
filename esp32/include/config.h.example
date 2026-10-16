@@ -1,0 +1,69 @@
+// =============================================================================
+// MARUDAM ESP32 — Two-Field Sensor Node Configuration Template
+// =============================================================================
+// Copy this file to esp32/include/config.h:
+//   cp esp32/include/config.h.example esp32/include/config.h
+// =============================================================================
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <Arduino.h>
+
+// --- Device & Schema Identity ---
+// UNIQUE IDENTIFIER: Must match the DEVICE_ID in backend/.env!
+// If Computer 1 is 'FIELD_001', set Computer 2 to 'FIELD_002'.
+#define DEVICE_ID         "FIELD_001"
+#define FIRMWARE_VERSION  "2.1.0"
+#define SCHEMA_VERSION    "2.0"
+
+// --- Communication Mode ---
+// "SERIAL" -> Output pure JSON Lines to USB Serial (115200 baud).
+// "WIFI"   -> Legacy HTTP POST fallback.
+#define COMMUNICATION_MODE "SERIAL"
+
+// --- Sampling Interval ---
+#define SAMPLE_INTERVAL_MS 5000
+
+// --- GPIO Pin Configuration ---
+#define PIN_DHT           27
+#define DHT_TYPE          DHT22
+#define PIN_I2C_SDA       21
+#define PIN_I2C_SCL       22
+#define PIN_ONE_WIRE      4
+
+// --- I2C Addresses ---
+#define ADS1115_I2C_ADDR  0x48
+#define BH1750_I2C_ADDR   0x23
+
+// --- Field Identifiers ---
+#define FIELD_1_ID        "field_1"
+#define FIELD_2_ID        "field_2"
+
+// --- ADS1115 Analog Channel Assignment ---
+#define ADS_CH_FIELD_1    0   // A0 -> Field 1 Moisture Sensor
+#define ADS_CH_FIELD_2    1   // A1 -> Field 2 Moisture Sensor
+
+// --- DS18B20 64-bit Hardware ROM Addresses ---
+// Enter your physical probe 64-bit addresses once discovered.
+// If all 8 bytes are 0x00, the firmware automatically discovers probes
+// and assigns probe index 0 -> Field 1, index 1 -> Field 2.
+static const uint8_t PROBE_ADDR_FIELD_1[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static const uint8_t PROBE_ADDR_FIELD_2[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+// --- Moisture Calibration Parameters ---
+// Set to true after measuring voltage in dry air and fully submerged in water.
+// When false, raw ADC count and voltage are transmitted safely without fabricating %.
+#define CALIBRATE_MOISTURE       false
+#define FIELD_1_VOLT_DRY         2.80f  // Voltage in dry air
+#define FIELD_1_VOLT_WET         1.30f  // Voltage submerged in water
+#define FIELD_2_VOLT_DRY         2.80f
+#define FIELD_2_VOLT_WET         1.30f
+
+// --- Optional Wi-Fi Credentials (only used if COMMUNICATION_MODE is "WIFI") ---
+#define WIFI_SSID         "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD     "YOUR_WIFI_PASSWORD"
+#define BACKEND_URL       "http://192.168.1.100:8000/api/sensors/readings"
+#define WIFI_TIMEOUT_MS   15000
+
+#endif // CONFIG_H

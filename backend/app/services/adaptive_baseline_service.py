@@ -340,13 +340,22 @@ class DeviceBaselineState:
 _device_states: dict[str, DeviceBaselineState] = {}
 
 
-def _get_or_create_state(device_id: str) -> DeviceBaselineState:
-    if device_id not in _device_states:
-        _device_states[device_id] = DeviceBaselineState(
+def _state_key(device_id: str, field_id: str = "field_1") -> str:
+    """Helper to form composite key per device and field for complete data isolation."""
+    return f"{device_id}:{field_id}" if field_id else device_id
+
+
+def _get_or_create_state(device_id: str, field_id: str = "field_1") -> DeviceBaselineState:
+    key = _state_key(device_id, field_id)
+    if key not in _device_states:
+        _device_states[key] = DeviceBaselineState(
             device_id=device_id,
             learning_started_at=datetime.now(tz=timezone.utc),
         )
-    return _device_states[device_id]
+    # Maintain legacy alias for field_1 so single-arg lookups succeed
+    if field_id == "field_1" and device_id not in _device_states:
+        _device_states[device_id] = _device_states[key]
+    return _device_states[key]
 
 
 # =============================================================================
@@ -440,12 +449,13 @@ def _renormalised_formula(
 # FAST PATH — called from anomaly_service.detect() on every packet
 # =============================================================================
 
-def get_sensor_range(device_id: str, sensor: str) -> tuple[float, float]:
+def get_sensor_range(device_id: str, sensor: str, field_id: str = "field_1") -> tuple[float, float]:
     """
-    FAST PATH: Return the pre-computed (min_expected, max_expected) for a sensor.
+    FAST PATH: Return the pre-computed (min_expected, max_expected) for a sensor in a field.
     O(1) — no database access. Falls back to physical limits if no baseline yet.
     """
-    state = _device_states.get(device_id)
+    key = _state_key(device_id, field_id)
+    state = _device_states.get(key) or _device_states.get(device_id)
     if state and sensor in state.sensors:
         s = state.sensors[sensor]
         return s.min_expected, s.max_expected
@@ -453,9 +463,10 @@ def get_sensor_range(device_id: str, sensor: str) -> tuple[float, float]:
     return lim["min"], lim["max"]
 
 
-def get_sensor_mad_eff(device_id: str, sensor: str) -> float:
+def get_sensor_mad_eff(device_id: str, sensor: str, field_id: str = "field_1") -> float:
     """FAST PATH: Return effective MAD for a sensor (for deviation calculation)."""
-    state = _device_states.get(device_id)
+    key = _state_key(device_id, field_id)
+    state = _device_states.get(key) or _device_states.get(device_id)
     if state and sensor in state.sensors:
         return max(state.sensors[sensor].mad_eff, 1e-6)
     return 1.0
@@ -466,13 +477,15 @@ def record_anomaly_evidence(
     sensor: str,
     is_anomalous: bool,
     deviation_mads: float = 0.0,
+    field_id: str = "field_1",
 ) -> None:
     """
-    FAST PATH: Update in-memory anomaly evidence counters.
+    FAST PATH: Update in-memory anomaly evidence counters for a specific field.
     Called by anomaly_service.detect() for every packet.
     Also tracks first-seen timestamp for time-persistence regime check.
     """
-    state = _device_states.get(device_id)
+    key = _state_key(device_id, field_id)
+    state = _device_states.get(key) or _device_states.get(device_id)
     if not state or sensor not in state.sensors:
         return
     s = state.sensors[sensor]
@@ -488,9 +501,10 @@ def record_anomaly_evidence(
         s._anomaly_first_seen_at = None
 
 
-def update_anomaly_rate(device_id: str, rate: float) -> None:
-    """Called by anomaly_service to push the rolling anomaly rate."""
-    state = _device_states.get(device_id)
+def update_anomaly_rate(device_id: str, rate: float, field_id: str = "field_1") -> None:
+    """Called by anomaly_service to push the rolling anomaly rate for a specific field."""
+    key = _state_key(device_id, field_id)
+    state = _device_states.get(key) or _device_states.get(device_id)
     if state:
         state.anomaly_rate = _clip(rate, 0.0, 1.0)
 
@@ -937,9 +951,10 @@ def _determine_status(
 async def run_adaptive_calculation(
     device_id: str,
     context: dict,
+    field_id: str = "field_1",
 ) -> DeviceBaselineState:
     """
-    ADAPTIVE PATH — runs periodically (every T_update hours).
+    ADAPTIVE PATH — runs periodically (every T_update hours) for a specific field.
     Never called per-packet.
 
     context dict expected keys:
@@ -947,14 +962,14 @@ async def run_adaptive_calculation(
         weather_observations (list[dict] | None)
     """
     now   = datetime.now(tz=timezone.utc)
-    state = _get_or_create_state(device_id)
+    state = _get_or_create_state(device_id, field_id)
 
-    # ── Fetch bounded history ─────────────────────────────────────────────────
+    # ── Fetch bounded history for this field ──────────────────────────────────
     history: list[dict] = await asyncio.get_event_loop().run_in_executor(
-        None, supa.get_bounded_reading_history, device_id, HISTORY_LIMIT
+        None, supa.get_bounded_reading_history, device_id, field_id, HISTORY_LIMIT
     )
     if not history:
-        logger.info(f"Adaptive baseline [{device_id}]: no history yet, skipping.")
+        logger.info(f"Adaptive baseline [{device_id}/{field_id}]: no history yet, skipping.")
         return state
 
     # Sort chronologically (oldest first for consecutive-diff calculations)
@@ -1274,7 +1289,7 @@ async def run_adaptive_calculation(
     # ── Persist to Supabase ───────────────────────────────────────────────────
     for sensor, ns in updated_sensors.items():
         await asyncio.get_event_loop().run_in_executor(
-            None, supa.upsert_adaptive_baseline, device_id, sensor, _to_dict(ns)
+            None, supa.upsert_adaptive_baseline, device_id, sensor, _to_dict(ns), field_id
         )
 
     return state
@@ -1323,20 +1338,21 @@ def _to_dict(s: SensorBaselineState) -> dict:
 def restore_from_supabase(device_id: str) -> None:
     """
     Load previously persisted baseline states from Supabase on FastAPI startup.
-    Enables baseline survival across restarts.
+    Enables baseline survival across restarts for all fields.
     """
     rows = supa.load_adaptive_baselines(device_id)
     if not rows:
         logger.info(f"No persisted baselines for {device_id} — starting fresh.")
         return
 
-    state = _get_or_create_state(device_id)
     loaded = 0
     for row in rows:
         sensor = row.get("sensor")
+        field_id = row.get("field_id") or "field_1"
         if not sensor:
             continue
         try:
+            state = _get_or_create_state(device_id, field_id)
             mad_raw = float(row.get("mad", 0.0))
             mad_eff = max(mad_raw, MAD_MIN.get(sensor, 0.5))
             ns = SensorBaselineState(
@@ -1376,28 +1392,30 @@ def restore_from_supabase(device_id: str) -> None:
             logger.warning(f"Could not restore baseline for {sensor}: {e}")
 
     if loaded:
-        # Reconstruct device-level fields from sensors
-        confs = [s.confidence for s in state.sensors.values()]
-        state.confidence = statistics.mean(confs) if confs else 0.0
-        logger.info(f"Restored {loaded} sensor baselines for {device_id} from Supabase.")
+        for k, s in _device_states.items():
+            confs = [item.confidence for item in s.sensors.values()]
+            s.confidence = statistics.mean(confs) if confs else 0.0
+        logger.info(f"Restored {loaded} sensor baselines for {device_id} across fields from Supabase.")
 
 
 # =============================================================================
 # PUBLIC API — get_full_baseline_state
 # =============================================================================
 
-def get_full_baseline_state(device_id: str) -> dict:
+def get_full_baseline_state(device_id: str, field_id: str = "field_1") -> dict:
     """
-    Full structured baseline response for the API endpoint.
+    Full structured baseline response for the API endpoint for a specific field.
     Backward compatible: sensors.* always has center, min_expected,
     max_expected, confidence, observations (existing dashboard uses these).
     """
     now   = datetime.now(tz=timezone.utc)
-    state = _device_states.get(device_id)
+    key   = _state_key(device_id, field_id)
+    state = _device_states.get(key) or _device_states.get(device_id)
 
     if not state or not state.sensors:
         return {
             "device_id":          device_id,
+            "field_id":           field_id,
             "status":             "LEARNING",
             "creation": {
                 "recommended_hours":       round(T0_DAYS * 24.0, 2),

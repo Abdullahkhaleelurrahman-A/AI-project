@@ -30,8 +30,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (allow safe .example templates)
 .env*
+!.env.example
+!backend/.env.example
 
 # vercel
 .vercel
@@ -42,10 +44,12 @@ next-env.d.ts
 
 # ESP32 local configuration — contains Wi-Fi credentials, NEVER commit
 esp32/include/config.h
+!esp32/include/config.h.example
 
 # Python cache
-backend/__pycache__/
-backend/*.pyc
+**/__pycache__/
+*.py[cod]
+*$py.class
 backend/sensors.db
 
 # PlatformIO build artifacts

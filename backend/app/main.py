@@ -25,36 +25,36 @@ def on_packet_received(packet: ESP32Packet) -> None:
     """
     Called by the serial manager for every valid ESP32 packet.
     Pipeline:
-      1. Normalise (apply UTC timestamp)
+      1. Normalise (apply UTC timestamp, produce reading per field)
       2. Update device status
-      3. Write to Supabase
-      4. Run anomaly detection
+      3. Write to Supabase (isolated per field_id)
+      4. Run anomaly detection (isolated per field_id)
+      5. Downstream AI analysis for anomalies (fire-and-forget)
     This runs in the asyncio event loop thread — keep it fast.
     """
     try:
-        reading = sensor_service.normalise_packet(packet)
+        readings = sensor_service.normalise_packet_fields(packet)
 
         device_service.record_reading_received(
             port=serial_manager.get_device_status().get("serial_port") or "MOCK"
         )
 
-        supabase_service.upsert_reading(reading)
+        for reading in readings:
+            supabase_service.upsert_reading(reading)
 
-        anomaly_result = anomaly_service.detect(reading)
-        
-        # Trigger Gemini AI if an anomaly was successfully stored (event_ids present)
-        if anomaly_result and anomaly_result.event_ids:
-            # We must fetch context asynchronously, then run AI.
-            # Create a fire-and-forget task so we don't block the packet pipeline.
-            async def run_ai():
-                try:
-                    context = await india_context_service.get_context_for_device(reading.device_id)
-                    user_lang = context.get("user_language", "English")
-                    await ai_service.analyze_events_with_gemini(anomaly_result, context, user_lang)
-                except Exception as e:
-                    logger.error(f"Background AI task failed: {e}")
+            anomaly_result = anomaly_service.detect(reading)
             
-            asyncio.create_task(run_ai())
+            # Trigger Gemini AI if an anomaly was successfully stored (event_ids present)
+            if anomaly_result and anomaly_result.event_ids:
+                async def run_ai(res=anomaly_result, r=reading):
+                    try:
+                        context = await india_context_service.get_context_for_device(r.device_id)
+                        user_lang = context.get("user_language", "English")
+                        await ai_service.analyze_events_with_gemini(res, context, user_lang)
+                    except Exception as e:
+                        logger.error(f"Background AI task failed for {r.field_id}: {e}")
+                
+                asyncio.create_task(run_ai())
 
     except Exception as e:
         logger.error(f"Error in packet pipeline: {e}")
@@ -69,20 +69,21 @@ _adaptive_task: asyncio.Task | None = None
 async def _adaptive_baseline_loop(device_id: str) -> None:
     """
     ADAPTIVE PATH background loop.
-    Runs every T_update hours. Fetches bounded history, recalculates
+    Runs periodically for both fields. Fetches bounded history, recalculates
     robust baselines, and persists to Supabase.
     Never called per-packet (that is the FAST PATH in anomaly_service).
     """
-    logger.info(f"Adaptive baseline loop started for {device_id}")
+    logger.info(f"Adaptive baseline loop started for {device_id} across fields")
     while True:
         try:
-            # Context is resolved from the India agricultural datasets
             context = await india_context_service.get_context_for_device(device_id)
-            
-            state = await adaptive_baseline_service.run_adaptive_calculation(
-                device_id=device_id, context=context
-            )
-            sleep_hours = max(state.update_interval_hours, 0.25)  # min 15-min loop
+            min_interval = 24.0
+            for fid in ["field_1", "field_2"]:
+                state = await adaptive_baseline_service.run_adaptive_calculation(
+                    device_id=device_id, context=context, field_id=fid
+                )
+                min_interval = min(min_interval, max(state.update_interval_hours, 0.25))
+            sleep_hours = min_interval
         except Exception as e:
             logger.error(f"Adaptive baseline loop error: {e}")
             sleep_hours = 1.0   # back off 1 h on error
@@ -189,10 +190,51 @@ async def legacy_device_status(device_id: str):
         "age_seconds": int(age) if age else None,
     }
 
+@app.get("/api/sensors/compare/{device_id}", tags=["sensors"])
+async def compare_two_fields(device_id: str):
+    """
+    Returns latest readings for both Field 1 and Field 2 side-by-side,
+    including shared environmental context, raw ADC counts, and probe addresses.
+    """
+    data = supabase_service.get_latest_two_field_readings(device_id)
+    pkt = serial_manager.get_last_packet()
+    dev_status = serial_manager.get_device_status()
+    is_live = dev_status.get("status") == "CONNECTED"
+
+    if pkt and isinstance(pkt, dict) and "fields" in pkt:
+        pkt_fields = pkt.get("fields", {})
+        shared = pkt.get("shared", {})
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        for fid in ["field_1", "field_2"]:
+            if fid in pkt_fields:
+                live_item = {
+                    **pkt_fields[fid],
+                    "timestamp": now_iso,
+                    "device_id": device_id,
+                    **shared,
+                }
+                # When device is actively streaming, or DB has no reading yet, supply live reading
+                if is_live or not data.get(fid):
+                    data[fid] = live_item
+    
+    f1 = data.get("field_1") or {}
+    f2 = data.get("field_2") or {}
+    shared_env = {
+        "air_temperature": f1.get("air_temperature") or f2.get("air_temperature"),
+        "humidity":        f1.get("humidity") or f2.get("humidity"),
+        "light_lux":       f1.get("light_lux") or f2.get("light_lux"),
+    }
+    return {
+        "device_id": device_id,
+        "field_1":   data.get("field_1"),
+        "field_2":   data.get("field_2"),
+        "shared":    shared_env,
+    }
+
 @app.get("/api/sensors/latest/{device_id}", tags=["legacy"])
-async def legacy_latest(device_id: str):
-    # Try Supabase first to get injected dataset values (pH, EC)
-    row = supabase_service.get_latest_reading(device_id)
+async def legacy_latest(device_id: str, field_id: Optional[str] = None):
+    # Try Supabase first to get injected dataset values (pH, EC) and specific field
+    row = supabase_service.get_latest_reading(device_id, field_id=field_id)
     if row:
         return row
     
@@ -202,16 +244,13 @@ async def legacy_latest(device_id: str):
     return pkt
 
 @app.get("/api/baseline/{device_id}", tags=["legacy"])
-async def legacy_baseline(device_id: str):
-    """Returns the full adaptive baseline state for a device.
-    Backward compatible: sensors.* key contains center, min_expected,
-    max_expected, confidence, observations for the existing dashboard.
-    """
-    return adaptive_baseline_service.get_full_baseline_state(device_id)
+async def legacy_baseline(device_id: str, field_id: str = "field_1"):
+    """Returns the full adaptive baseline state for a device and field."""
+    return adaptive_baseline_service.get_full_baseline_state(device_id, field_id=field_id)
 
 @app.get("/api/events/{device_id}", tags=["legacy"])
-async def legacy_events(device_id: str):
-    rows = supabase_service.get_recent_anomalies(device_id, limit=20)
+async def legacy_events(device_id: str, field_id: Optional[str] = None):
+    rows = supabase_service.get_recent_anomalies(device_id, field_id=field_id, limit=20)
     return rows
 
 @app.get("/api/context/{device_id}", tags=["context"])
