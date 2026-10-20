@@ -17,6 +17,28 @@ from app.utils.logger import get_logger
 logger = get_logger("sensor_service")
 
 
+_crop_ref_cache: dict[str, tuple[float | None, float | None]] = {}
+
+
+def _get_crop_reference(device_id: str) -> tuple[float | None, float | None]:
+    if device_id in _crop_ref_cache:
+        return _crop_ref_cache[device_id]
+    ref_ph = None
+    ref_ec = None
+    try:
+        client = supabase_service.get_client()
+        if client:
+            farm_res = client.table("farms").select("crop_id").eq("device_id", device_id).limit(1).execute()
+            if farm_res.data:
+                crop_id = farm_res.data[0].get("crop_id")
+                if crop_id:
+                    ref_ph, ref_ec = soil_dataset_service.get_crop_soil_reference(crop_id)
+            _crop_ref_cache[device_id] = (ref_ph, ref_ec)
+    except Exception as e:
+        logger.debug(f"Could not resolve crop soil reference for {device_id}: {e}")
+    return ref_ph, ref_ec
+
+
 def normalise_packet_fields(packet: ESP32Packet) -> List[SensorReading]:
     """
     Convert a validated two-field ESP32Packet into a list of SensorReading objects
@@ -34,19 +56,8 @@ def normalise_packet_fields(packet: ESP32Packet) -> List[SensorReading]:
     shared_humidity = packet.shared.humidity if packet.shared else packet.humidity
     shared_light    = packet.shared.light_lux if packet.shared else packet.light_lux
 
-    # Fetch crop reference if available
-    ref_ph = None
-    ref_ec = None
-    try:
-        client = supabase_service.get_client()
-        if client:
-            farm_res = client.table("farms").select("crop_id").eq("device_id", logical_device_id).limit(1).execute()
-            if farm_res.data:
-                crop_id = farm_res.data[0].get("crop_id")
-                if crop_id:
-                    ref_ph, ref_ec = soil_dataset_service.get_crop_soil_reference(crop_id)
-    except Exception as e:
-        logger.debug(f"Could not resolve crop soil reference for {logical_device_id}: {e}")
+    # Fetch crop reference using cached lookup
+    ref_ph, ref_ec = _get_crop_reference(logical_device_id)
 
     # Process all fields present in packet
     fields_dict = packet.fields or {}

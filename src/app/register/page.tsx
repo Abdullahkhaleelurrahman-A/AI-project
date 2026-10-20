@@ -2,11 +2,12 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import MarudamLogo from '@/components/brand/MarudamLogo';
 import MarudamSelect from '@/components/ui/MarudamSelect';
 import { LOCATIONS, CROPS, STATES, type Language } from '@/lib/data/db';
 import { getTranslations } from '@/lib/i18n/translations';
+import { saveFarmProfile, getStateForDistrict } from '@/lib/data/farmProfile';
 
 const LANGUAGES: Language[] = [
   'English', 'Hindi', 'Bengali', 'Telugu', 'Marathi', 'Tamil', 'Gujarati', 'Urdu', 'Kannada', 'Odia', 'Malayalam', 'Punjabi', 'Assamese', 'Maithili', 'Sanskrit', 'Konkani', 'Manipuri', 'Kashmiri', 'Nepali', 'Sindhi', 'Dogri', 'Santali'
@@ -92,26 +93,46 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
 
-    // ── Step 1: Sign up via the SSR browser client ─────────────────────
-    // The SSR client handles cookie-based session management for page
-    // navigation after login.  We use it only for auth.signUp() here.
-    const supabase = createClient();
-
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        // Store name/language in user_metadata as a recoverable fallback
-        // for the email-confirmation flow where no session is returned.
-        data: { name: name.trim(), language },
-      },
+    const resolvedState = state || getStateForDistrict(district);
+    await saveFarmProfile({
+      name: name.trim() || 'Local Farmer',
+      crop_id: cropId,
+      district: district,
+      state: resolvedState,
+      sowing_date: sowingDate || new Date().toISOString().slice(0, 10),
+      device_id: deviceId.trim() || 'FIELD_001',
     });
 
-    if (authError) {
-      setError(authError.message);
+    if (!isSupabaseConfigured()) {
       setLoading(false);
+      setError(
+        'Authentication service is not configured. ' +
+        'Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in your .env.local file.'
+      );
       return;
     }
+
+    try {
+      // ── Step 1: Sign up via the SSR browser client ─────────────────────
+      // The SSR client handles cookie-based session management for page
+      // navigation after login.  We use it only for auth.signUp() here.
+      const supabase = createClient();
+
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          // Store name/language in user_metadata as a recoverable fallback
+          // for the email-confirmation flow where no session is returned.
+          data: { name: name.trim(), language },
+        },
+      });
+
+      if (authError) {
+        setError(authError.message);
+        setLoading(false);
+        return;
+      }
 
     if (!authData.user) {
       setError('Registration failed: no user returned from Supabase. Please try again.');
@@ -217,7 +238,12 @@ export default function RegisterPage() {
     setLoading(false);
     setSuccess(true);
     setTimeout(() => router.push('/dashboard'), 1500);
-  };
+  } catch (err: unknown) {
+    setLoading(false);
+    const message = err instanceof Error ? err.message : 'Registration failed. Please try again.';
+    setError(message);
+  }
+};
 
 
 
@@ -392,7 +418,14 @@ export default function RegisterPage() {
               {t.register.next}
             </button>
           ) : (
-            <button id="reg-submit" onClick={handleSubmit} disabled={loading||success} style={{flex:1,background:loading?'rgba(78,136,56,0.45)':'linear-gradient(135deg,#4e8838 0%,#74b438 100%)',color:'var(--text-primary)',border:'none',borderRadius:'9999px',padding:'0.78rem',fontSize:'0.92rem',fontWeight:700,cursor:loading?'not-allowed':'pointer',boxShadow:'0 4px 22px rgba(78,136,56,0.38)'}}>
+            <button id="reg-submit" onClick={handleSubmit} disabled={loading||success} style={{flex:1,background:loading?'rgba(78,136,56,0.45)':'linear-gradient(135deg,#4e8838 0%,#74b438 100%)',color:'var(--text-primary)',border:'none',borderRadius:'9999px',padding:'0.78rem',fontSize:'0.92rem',fontWeight:700,cursor:loading?'not-allowed':'pointer',boxShadow:'0 4px 22px rgba(78,136,56,0.38)',display:'flex',alignItems:'center',justifyContent:'center',gap:'0.5rem'}}>
+              {loading && (
+                <span style={{
+                  display:'inline-block',width:'14px',height:'14px',
+                  border:'2px solid rgba(255,255,255,0.3)',borderTopColor:'white',
+                  borderRadius:'50%',animation:'marudam-spin 0.6s linear infinite',
+                }}/>
+              )}
               {loading ? t.register.creatingAccount : t.register.createAccount}
             </button>
           )}
@@ -405,6 +438,13 @@ export default function RegisterPage() {
           </a>
         </p>
       </div>
+
+      {/* Spinner keyframes */}
+      <style>{`
+        @keyframes marudam-spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

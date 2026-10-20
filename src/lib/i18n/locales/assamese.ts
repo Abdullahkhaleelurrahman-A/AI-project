@@ -356,7 +356,7 @@ export const assamese: Translations = {
     "suggested4": "মোৰ পথাৰত স্বাভাৱিকতকৈ কি পৃথক?",
     "suggested5": "MARUDAM-এ কেনেকৈ মোৰ পথাৰৰ বিষয়ে শিকি আছে?",
     "suggested6": "মোৰ মাটিৰ আৰ্দ্ৰতাৰ মানৰ অৰ্থ কি?",
-    "errorNotConfigured": "AI সহায়ক এতিয়াও কনফিগাৰ কৰা হোৱা নাই। অনুগ্ৰহ কৰি OPENAI_API_KEY ছেট কৰক।",
+    "errorNotConfigured": "AI সহায়ক এতিয়াও কনফিগাৰ কৰা হোৱা নাই। অনুগ্ৰহ কৰি GEMINI_API_KEY ছেট কৰক।",
     "errorGeneral": "কিবা ভুল হ'ল। অনুগ্ৰহ কৰি পুনৰ চেষ্টা কৰক।",
     "emptyState": "মোৰ লগত আপোনাৰ পথাৰৰ বিষয়ে যিকোনো কথা সুধিব পাৰে।"
   },

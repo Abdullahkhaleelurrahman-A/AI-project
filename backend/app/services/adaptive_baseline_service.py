@@ -135,8 +135,13 @@ CROP_PRIORS: dict[str, dict[str, tuple]] = {
     "tomato:vegetative": {"soil_moisture": (50, 70), "air_temperature": (24, 32)},
     "tomato:flowering":  {"soil_moisture": (60, 80), "air_temperature": (20, 28)},
     "tomato:fruiting":   {"soil_moisture": (55, 75), "air_temperature": (22, 30)},
+    "brinjal:seedling":  {"soil_moisture": (55, 70), "air_temperature": (22, 30)},
+    "brinjal:vegetative":{"soil_moisture": (50, 70), "air_temperature": (25, 35)},
+    "brinjal:flowering": {"soil_moisture": (60, 80), "air_temperature": (25, 32)},
+    "brinjal:fruiting":  {"soil_moisture": (55, 75), "air_temperature": (25, 35)},
     "rice:tillering":    {"soil_moisture": (80, 100)},
     "wheat:vegetative":  {"soil_moisture": (40, 65), "air_temperature": (15, 25)},
+
 }
 
 SENSITIVE_STAGES = frozenset(

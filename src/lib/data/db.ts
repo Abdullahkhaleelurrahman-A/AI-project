@@ -147,6 +147,22 @@ export const CROPS: Record<string, Crop> = {
       { id: 'maturity',   name_en: 'Maturity',   name_hi: 'परिपक्वता', name_ta: 'முதிர்ச்சி நிலை', name_te: 'పక్వ దశ',       name_kn: 'ಪ್ರೌಢ ಹಂತ',    duration_days: 15 },
     ],
   },
+  'brinjal': {
+    id: 'brinjal',
+    name_en: 'Brinjal',
+    name_hi: 'बैंगन',
+    name_ta: 'கத்திரிக்காய்',
+    name_te: 'వంకాయ',
+    name_kn: 'ಬದನೆಕಾಯಿ',
+    scientific_name: 'Solanum melongena',
+    stages: [
+      { id: 'seedling',    name_en: 'Seedling',      name_hi: 'अंकुरण',    name_ta: 'முளைப்பு',         name_te: 'మొలక దశ',       name_kn: 'ಮೊಳಕೆ',        duration_days: 25 },
+      { id: 'vegetative',  name_en: 'Vegetative',    name_hi: 'वानस्पतिक', name_ta: 'வளர்ச்சி நிலை',   name_te: 'శాఖీయ దశ',      name_kn: 'ಸಸ್ಯ ಬೆಳವಣಿಗೆ', duration_days: 35 },
+      { id: 'flowering',   name_en: 'Flowering',     name_hi: 'फूलन',      name_ta: 'பூக்கும் நிலை',   name_te: 'పుష్పించే దశ',   name_kn: 'ಹೂಬಿಡುವ ಹಂತ',  duration_days: 20 },
+      { id: 'fruiting',    name_en: 'Fruiting',      name_hi: 'फलन',       name_ta: 'காய்க்கும் நிலை', name_te: 'ఫలించే దశ',      name_kn: 'ಹಣ್ಣಾಗುವ ಹಂತ', duration_days: 40 },
+      { id: 'maturity',    name_en: 'Maturity',      name_hi: 'परिपक्वता', name_ta: 'முதிர்ச்சி நிலை', name_te: 'పక్వ దశ',        name_kn: 'ಪ್ರೌಢ ಹಂತ',    duration_days: 20 },
+    ],
+  },
   'rice': {
     id: 'rice',
     name_en: 'Rice',
@@ -272,6 +288,30 @@ export const CROP_PROFILES: CropProfile[] = [
     optimal_temp_min: 22, optimal_temp_max: 30,
     soil_moisture_min: 55, soil_moisture_max: 75,
     ph_min: 6.0, ph_max: 6.8, ec_min: 1.5, ec_max: 2.5
+  },
+  {
+    id: 'brn-seedling', crop_id: 'brinjal', growth_stage: 'seedling',
+    optimal_temp_min: 22, optimal_temp_max: 30,
+    soil_moisture_min: 55, soil_moisture_max: 70,
+    ph_min: 5.5, ph_max: 6.5, ec_min: 1.0, ec_max: 2.0
+  },
+  {
+    id: 'brn-vegetative', crop_id: 'brinjal', growth_stage: 'vegetative',
+    optimal_temp_min: 25, optimal_temp_max: 35,
+    soil_moisture_min: 50, soil_moisture_max: 70,
+    ph_min: 5.5, ph_max: 6.8, ec_min: 1.5, ec_max: 2.5
+  },
+  {
+    id: 'brn-flowering', crop_id: 'brinjal', growth_stage: 'flowering',
+    optimal_temp_min: 25, optimal_temp_max: 32,
+    soil_moisture_min: 60, soil_moisture_max: 80,
+    ph_min: 5.5, ph_max: 6.8, ec_min: 1.5, ec_max: 3.0
+  },
+  {
+    id: 'brn-fruiting', crop_id: 'brinjal', growth_stage: 'fruiting',
+    optimal_temp_min: 25, optimal_temp_max: 35,
+    soil_moisture_min: 55, soil_moisture_max: 75,
+    ph_min: 5.5, ph_max: 6.8, ec_min: 1.5, ec_max: 2.8
   },
   {
     id: 'rice-tillering', crop_id: 'rice', growth_stage: 'tillering',

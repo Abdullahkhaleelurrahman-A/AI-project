@@ -192,7 +192,7 @@ export const bengali: Translations = {
     suggested4: 'আমার মাঠে স্বাভাবিকের চেয়ে কী পার্থক্য রয়েছে?',
     suggested5: 'MARUDAM কীভাবে আমার মাঠ শিখছে?',
     suggested6: 'আমার মাটির আর্দ্রতা মানের অর্থ কী?',
-    errorNotConfigured: 'এআই সহকারী এখনও কনফিগার করা হয়নি। অনুগ্রহ করে OPENAI_API_KEY সেট করুন।',
+    errorNotConfigured: 'এআই সহকারী এখনও কনফিগার করা হয়নি। অনুগ্রহ করে GEMINI_API_KEY সেট করুন।',
     errorGeneral: 'কিছু ভুল হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
     emptyState: 'আপনার মাঠ সম্পর্কে আমাকে কিছু জিজ্ঞাসা করুন।',
   },

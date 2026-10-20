@@ -356,7 +356,7 @@ export const dogri: Translations = {
     "suggested4": "मेरे खेतर च सामान्य थमां केह वक्खरा है?",
     "suggested5": "MARUDAM मेरे खेतर गी कियां सिक्खदा पैया है?",
     "suggested6": "मेरी मिट्टी दी नमी दा मूल्य केह दस्सदा है?",
-    "errorNotConfigured": "AI सहायक अज्जै तक कॉन्फ़िगर नी कीता गेया है। कृपया OPENAI_API_KEY सेट करो।",
+    "errorNotConfigured": "AI सहायक अज्जै तक कॉन्फ़िगर नी कीता गेया है। कृपया GEMINI_API_KEY सेट करो।",
     "errorGeneral": "कुझ गलत होई गेया। कृपया दोबारा कोशिश करो।",
     "emptyState": "मेरे थमां अपने खेतर दे बारे च कुझ बी पुछो।"
   },

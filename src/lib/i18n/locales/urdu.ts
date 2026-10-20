@@ -356,7 +356,7 @@ export const urdu: Translations = {
     "suggested4": "میرے کھیت میں معمول سے کیا مختلف ہے؟",
     "suggested5": "MARUDAM میرے کھیت کے بارے میں کیسے سیکھ رہا ہے؟",
     "suggested6": "میری مٹی کی نمی کی قیمت کا کیا مطلب ہے؟",
-    "errorNotConfigured": "اے آئی معاون ابھی کنفیگر نہیں ہوا ہے۔ براہ کرم OPENAI_API_KEY سیٹ کریں۔",
+    "errorNotConfigured": "اے آئی معاون ابھی کنفیگر نہیں ہوا ہے۔ براہ کرم GEMINI_API_KEY سیٹ کریں۔",
     "errorGeneral": "کچھ غلط ہو گیا۔ براہ کرم دوبارہ کوشش کریں۔",
     "emptyState": "مجھ سے اپنے کھیت کے بارے میں کچھ بھی پوچھیں۔"
   },

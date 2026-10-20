@@ -192,7 +192,7 @@ export const punjabi: Translations = {
     suggested4: 'ਮੇਰੇ ਖੇਤ ਵਿੱਚ ਆਮ ਨਾਲੋਂ ਕੀ ਵੱਖਰਾ ਹੈ?',
     suggested5: 'MARUDAM ਮੇਰੇ ਖੇਤ ਨੂੰ ਕਿਵੇਂ ਸਿੱਖ ਰਿਹਾ ਹੈ?',
     suggested6: 'ਮੇਰੇ ਮਿੱਟੀ ਦੀ ਨਮੀ ਦੇ ਮੁੱਲ ਦਾ ਕੀ ਅਰਥ ਹੈ?',
-    errorNotConfigured: 'AI ਸਹਾਇਕ ਅਜੇ ਸੰਰਚਿਤ ਨਹੀਂ ਹੈ। ਕਿਰਪਾ ਕਰਕੇ OPENAI_API_KEY ਸੈੱਟ ਕਰੋ।',
+    errorNotConfigured: 'AI ਸਹਾਇਕ ਅਜੇ ਸੰਰਚਿਤ ਨਹੀਂ ਹੈ। ਕਿਰਪਾ ਕਰਕੇ GEMINI_API_KEY ਸੈੱਟ ਕਰੋ।',
     errorGeneral: 'ਕੁਝ ਗਲਤ ਹੋ ਗਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰੋ।',
     emptyState: 'ਮੈਨੂੰ ਆਪਣੇ ਖੇਤ ਬਾਰੇ ਕੁਝ ਵੀ ਪੁੱਛੋ।',
   },

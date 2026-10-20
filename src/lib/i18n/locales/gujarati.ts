@@ -356,7 +356,7 @@ export const gujarati: Translations = {
     "suggested4": "મારા ખેતરમાં સામાન્ય કરતાં શું અલગ છે?",
     "suggested5": "MARUDAM મારા ખેતર વિશે કેવી રીતે શીખી રહ્યું છે?",
     "suggested6": "મારી જમીનના ભેજનું મૂલ્ય શું દર્શાવે છે?",
-    "errorNotConfigured": "AI સહાયક હજુ સુધી સેટ થયેલ નથી. કૃપા કરીને OPENAI_API_KEY સેટ કરો.",
+    "errorNotConfigured": "AI સહાયક હજુ સુધી સેટ થયેલ નથી. કૃપા કરીને GEMINI_API_KEY સેટ કરો.",
     "errorGeneral": "કંઈક ખોટું થયું. કૃપા કરીને ફરીથી પ્રયાસ કરો.",
     "emptyState": "તમારા ખેતર વિશે મને કંઈપણ પૂછો."
   },

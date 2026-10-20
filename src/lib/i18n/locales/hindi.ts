@@ -356,7 +356,7 @@ export const hindi: Translations = {
     "suggested4": "मेरे खेत में सामान्य से क्या अलग है?",
     "suggested5": "Marudam मेरे खेत को कैसे सीख रहा है?",
     "suggested6": "मेरी मिट्टी के नमी मान का क्या अर्थ है?",
-    "errorNotConfigured": "एआई सहायक अभी कॉन्फ़िगर नहीं किया गया है। कृपया OPENAI_API_KEY सेट करें।",
+    "errorNotConfigured": "एआई सहायक अभी कॉन्फ़िगर नहीं किया गया है। कृपया GEMINI_API_KEY सेट करें।",
     "errorGeneral": "कुछ गलत हो गया। कृपया पुनः प्रयास करें।",
     "emptyState": "मुझसे अपने खेत के बारे में कुछ भी पूछें।"
   },

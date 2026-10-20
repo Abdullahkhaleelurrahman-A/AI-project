@@ -192,7 +192,7 @@ export const kannada: Translations = {
     suggested4: 'ನನ್ನ ಕ್ಷೇತ್ರದಲ್ಲಿ ಸಾಮಾನ್ಯಕ್ಕಿಂತ ಏನು ಭಿನ್ನವಾಗಿದೆ?',
     suggested5: 'MARUDAM ನನ್ನ ಕ್ಷೇತ್ರವನ್ನು ಹೇಗೆ ಕಲಿಯುತ್ತಿದೆ?',
     suggested6: 'ನನ್ನ ಮಣ್ಣಿನ ತೇವಾಂಶ ಮೌಲ್ಯದ ಅರ್ಥವೇನು?',
-    errorNotConfigured: 'ಎಐ ಸಹಾಯಕವನ್ನು ಇನ್ನೂ ಸಂರಚಿಸಲಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು OPENAI_API_KEY ಅನ್ನು ಹೊಂದಿಸಿ.',
+    errorNotConfigured: 'ಎಐ ಸಹಾಯಕವನ್ನು ಇನ್ನೂ ಸಂರಚಿಸಲಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು GEMINI_API_KEY ಅನ್ನು ಹೊಂದಿಸಿ.',
     errorGeneral: 'ಏನೋ ತಪ್ಪಾಗಿದೆ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.',
     emptyState: 'ನಿಮ್ಮ ಕ್ಷೇತ್ರದ ಬಗ್ಗೆ ನನಗೆ ಏನಾದರೂ ಕೇಳಿ.',
   },

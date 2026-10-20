@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import MarudamLogo from '@/components/brand/MarudamLogo';
 import { type Language, getTranslations } from '@/lib/i18n/translations';
 
@@ -35,23 +35,45 @@ export default function LoginPage() {
     if (!email.trim()) { setError(t.login.errorEmailRequired); return; }
     if (!password)     { setError(t.login.errorPasswordRequired); return; }
 
-    setLoading(true);
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-
-    if (authError) {
+    // ── Guard: Supabase must be configured for real auth ──────────────────
+    if (!isSupabaseConfigured()) {
       setError(
-        authError.message.includes('Invalid login credentials')
-          ? t.login.errorInvalidCredentials
-          : t.login.errorGeneral
+        'Authentication service is not configured. ' +
+        'Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in your .env.local file.'
       );
       return;
     }
-    router.push('/dashboard');
+
+    setLoading(true);
+
+    try {
+      const supabase = createClient();
+      const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      setLoading(false);
+
+      if (authError) {
+        setError(
+          authError.message.includes('Invalid login credentials')
+            ? t.login.errorInvalidCredentials
+            : t.login.errorGeneral
+        );
+        return;
+      }
+      const nextParam = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('next')
+        : null;
+      const destination =
+        nextParam && nextParam.startsWith('/') && !nextParam.startsWith('//')
+          ? nextParam
+          : '/dashboard';
+      router.push(destination);
+    } catch {
+      setLoading(false);
+      setError(t.login.errorGeneral);
+    }
   };
 
-  /* â”€â”€ style helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+  /* ── style helpers ─────────────────────────────────────────────────── */
   const fieldStyle: React.CSSProperties = {
     width: '100%',
     background: 'var(--border-very-subtle)',
@@ -122,8 +144,9 @@ export default function LoginPage() {
 
         {/* Error */}
         {error && (
-          <div role="alert" style={{background:'rgba(239,68,68,0.12)',border:'1px solid rgba(239,68,68,0.25)',borderRadius:'0.75rem',padding:'0.65rem 1rem',color:'#f87171',fontSize:'0.83rem',marginBottom:'1.25rem'}}>
-            {error}
+          <div role="alert" style={{background:'rgba(239,68,68,0.12)',border:'1px solid rgba(239,68,68,0.25)',borderRadius:'0.75rem',padding:'0.65rem 1rem',color:'#f87171',fontSize:'0.83rem',marginBottom:'1.25rem',display:'flex',alignItems:'flex-start',gap:'0.5rem'}}>
+            <span style={{flexShrink:0,marginTop:'0.05rem'}}>⚠</span>
+            <span>{error}</span>
           </div>
         )}
 
@@ -136,7 +159,8 @@ export default function LoginPage() {
             <input id="login-email" type="email" value={email}
               onChange={e=>setEmail(e.target.value)}
               placeholder="you@example.com" required autoComplete="email"
-              style={fieldStyle} onFocus={focusField} onBlur={blurField}/>
+              disabled={loading}
+              style={{...fieldStyle, opacity: loading ? 0.6 : 1}} onFocus={focusField} onBlur={blurField}/>
           </div>
 
           {/* Password */}
@@ -145,22 +169,31 @@ export default function LoginPage() {
               <label htmlFor="login-password" style={{color:'rgba(255,255,255,0.68)',fontSize:'0.82rem',fontWeight:500}}>
                 {t.login.password}
               </label>
-              <a href="#" style={{color:'var(--brand-primary)',fontSize:'0.78rem',textDecoration:'none'}}>
+              <a href="/forgot-password" style={{color:'var(--brand-primary)',fontSize:'0.78rem',textDecoration:'none'}}>
                 {t.login.forgotPassword}
               </a>
             </div>
             <input id="login-password" type="password" value={password}
               onChange={e=>setPassword(e.target.value)}
               placeholder="••••••••" required autoComplete="current-password"
-              style={fieldStyle} onFocus={focusField} onBlur={blurField}/>
+              disabled={loading}
+              style={{...fieldStyle, opacity: loading ? 0.6 : 1}} onFocus={focusField} onBlur={blurField}/>
           </div>
 
           <button
             id="login-submit" type="submit" disabled={loading}
-            style={{width:'100%',background:loading?'rgba(78,136,56,0.45)':'linear-gradient(135deg,#4e8838 0%,#74b438 100%)',color:'var(--text-primary)',border:'none',borderRadius:'9999px',padding:'0.82rem',fontSize:'0.95rem',fontWeight:700,cursor:loading?'not-allowed':'pointer',transition:'transform 0.2s,box-shadow 0.2s',boxShadow:loading?'none':'0 4px 22px rgba(78,136,56,0.38)'}}
+            style={{width:'100%',background:loading?'rgba(78,136,56,0.45)':'linear-gradient(135deg,#4e8838 0%,#74b438 100%)',color:'var(--text-primary)',border:'none',borderRadius:'9999px',padding:'0.82rem',fontSize:'0.95rem',fontWeight:700,cursor:loading?'not-allowed':'pointer',transition:'transform 0.2s,box-shadow 0.2s',boxShadow:loading?'none':'0 4px 22px rgba(78,136,56,0.38)',display:'flex',alignItems:'center',justifyContent:'center',gap:'0.5rem'}}
             onMouseEnter={e=>{if(!loading)e.currentTarget.style.transform='translateY(-1px)';}}
             onMouseLeave={e=>{e.currentTarget.style.transform='';}}
           >
+            {loading && (
+              <span style={{
+                display:'inline-block',width:'16px',height:'16px',
+                border:'2px solid rgba(255,255,255,0.3)',borderTopColor:'white',
+                borderRadius:'50%',
+                animation:'marudam-spin 0.6s linear infinite',
+              }}/>
+            )}
             {loading ? t.login.signingIn : t.login.signIn}
           </button>
         </form>
@@ -172,6 +205,13 @@ export default function LoginPage() {
           </a>
         </p>
       </div>
+
+      {/* Spinner keyframes */}
+      <style>{`
+        @keyframes marudam-spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

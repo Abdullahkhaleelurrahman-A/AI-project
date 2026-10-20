@@ -192,7 +192,7 @@ export const telugu: Translations = {
     suggested4: 'నా పొలంలో సాధారణం కంటే ఏమి భిన్నంగా ఉంది?',
     suggested5: 'MARUDAM నా పొలాన్ని ఎలా నేర్చుకుంటోంది?',
     suggested6: 'నా నేల తేమ విలువ అర్థం ఏమిటి?',
-    errorNotConfigured: 'AI అసిస్టెంట్ ఇంకా కాన్ఫిగర్ చేయబడలేదు. దయచేసి OPENAI_API_KEY సెట్ చేయండి.',
+    errorNotConfigured: 'AI అసిస్టెంట్ ఇంకా కాన్ఫిగర్ చేయబడలేదు. దయచేసి GEMINI_API_KEY సెట్ చేయండి.',
     errorGeneral: 'ఏదో తప్పు జరిగింది. దయచేసి మళ్ళీ ప్రయత్నించండి.',
     emptyState: 'మీ పొలం గురించి నన్ను ఏదైనా అడగండి.',
   },

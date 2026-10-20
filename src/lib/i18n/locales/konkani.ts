@@ -192,7 +192,7 @@ export const konkani: Translations = {
     suggested4: 'माझ्या शेतात सामान्यपेक्षा काय वेगळे आसा?',
     suggested5: 'MARUDAM माझे शेत कशे शिकता?',
     suggested6: 'माझ्या मातयेच्या ओलीच्या मूल्याचा अर्थ काय आसा?',
-    errorNotConfigured: 'एआय सहाय्यक अजून कॉन्फिगर केल्ले ना. कृपया OPENAI_API_KEY सेट करा.',
+    errorNotConfigured: 'एआय सहाय्यक अजून कॉन्फिगर केल्ले ना. कृपया GEMINI_API_KEY सेट करा.',
     errorGeneral: 'काहीतरी चूक जाली. कृपया परत प्रयत्न करा.',
     emptyState: 'म्हाका तुमच्या शेताबद्दल काहीय विचारा.',
   },

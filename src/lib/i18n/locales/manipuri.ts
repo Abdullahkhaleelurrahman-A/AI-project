@@ -356,7 +356,7 @@ export const manipuri: Translations = {
     "suggested4": "ꯏꯒꯤ ꯂꧧꯕꯨꯛꯇꯥ ꯃꯍꯧꯁꯥꯗꯒꯤ ꯀꯔꯤ ꯈꯦꯟꯅꯕ ꯂꯩꯕ꯭ꯔꯥ?",
     "suggested5": "MARUDAM ꯅꯥ ꯏꯒꯤ ꯂꯧꯕꯨꯛꯀꯤ ꯃꯇꯥꯡꯗ ꯀꯔꯝꯅꯥ ꯇꯃꯂꯤꯕꯅꯣ?",
     "suggested6": "ꯏꯒꯤ ꯂꯩꯃꯥꯌꯒꯤ ꯑꯣꯇ꯭ꯊꯥꯡꯒꯤ ꯆꯥꯡ ꯑꯁꯤꯅꯥ ꯀꯔꯤ ꯍꯥꯏꯅꯤꯉꯥꯏꯅꯣ?",
-    "errorNotConfigured": "AI ꯃꯇꯦꯡꯄꯥꯡꯕ ꯍꯧꯖꯤꯛꯐꯣꯡꯕꯗ ꯁꯦꯝꯗ꯭ꯔꯤ꯫ ꯆꯥꯅꯕꯤꯗꯨꯅꯥ OPENAI_API_KEY ꯁꯦꯝꯕꯤꯌꯨ꯫",
+    "errorNotConfigured": "AI ꯃꯇꯦꯡꯄꯥꯡꯕ ꯍꯧꯖꯤꯛꯐꯣꯡꯕꯗ ꯁꯦꯝꯗ꯭ꯔꯤ꯫ ꯆꯥꯅꯕꯤꯗꯨꯅꯥ GEMINI_API_KEY ꯁꯦꯝꯕꯤꯌꯨ꯫",
     "errorGeneral": "ꯀꯔꯤꯒꯨꯝꯕ ꯑꯔꯥꯅꯕ ꯊꯣꯛꯈ꯭ꯔꯦ꯫ ꯑꯃꯨꯛ ꯍꯟꯅꯥ ꯍꯣꯠꯅꯕꯤꯌꯨ꯫",
     "emptyState": "ꯅꯍꯥꯛꯀꯤ ꯂꯧꯕꯨꯛꯀꯤ ꯃꯇꯥꯡꯗ ꯀꯔꯤꯒꯨꯝꯕ ꯑꯃꯥꯍꯦꯛꯇ ꯍꯪꯕꯤꯌꯨ꯫"
   },

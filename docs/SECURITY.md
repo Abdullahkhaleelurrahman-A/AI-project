@@ -6,8 +6,7 @@ MARUDAM strictly enforces separation of concerns between public frontend API key
 
 ### Frontend (`.env.local`)
 - **`NEXT_PUBLIC_SUPABASE_URL`**: Safe to expose in the browser. Points to the Supabase instance.
-- **`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`**: Safe to expose. Subject to Row Level Security (RLS). Cannot write or read sensitive data unless RLS policies permit it.
-- **`OPENAI_API_KEY`**: **WARNING**: This is currently located in `.env.local`. It MUST NOT be prefixed with `NEXT_PUBLIC_` to prevent it from leaking into the client bundle. The Next.js API routes or the local FastAPI backend should handle Gemini calls.
+- **`GEMINI_API_KEY`**: Highly sensitive. Located server-side in `.env.local` and `backend/.env`. It MUST NOT be prefixed with `NEXT_PUBLIC_` to prevent it from leaking into the client bundle. The Next.js API routes or the local FastAPI backend handle Gemini calls.
 
 ### Backend (`backend/.env`)
 - **`SUPABASE_SERVICE_ROLE_KEY`**: Highly sensitive. Grants root access to the Supabase database, bypassing all RLS policies. It is used strictly by the FastAPI backend to insert sensor readings and baselines. NEVER exposed to the frontend.

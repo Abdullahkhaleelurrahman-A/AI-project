@@ -22,22 +22,26 @@ logger = get_logger("supabase_service")
 _client: Optional[Client] = None
 _raw_columns_supported = True
 _field_id_supported = True
+_warned_not_configured = False
 
 
 def get_client() -> Optional[Client]:
     """Lazy-initialise the Supabase client. Returns None if not configured."""
-    global _client
+    global _client, _warned_not_configured
     if _client is not None:
         return _client
     if not settings.supabase_configured:
-        logger.warning(
-            "Supabase is not configured (SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing). "
-            "Data will not be persisted to the cloud."
-        )
+        if not _warned_not_configured:
+            logger.warning(
+                "Supabase is not configured (SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing/placeholder). "
+                "Data will not be persisted to the cloud."
+            )
+            _warned_not_configured = True
         return None
     try:
         _client = create_client(settings.supabase_url, settings.supabase_service_role_key)
-        logger.info("Supabase client initialised.")
+        _warned_not_configured = False
+        logger.info("Supabase client initialised successfully.")
     except Exception as e:
         logger.error(f"Failed to initialise Supabase client: {e}")
         _client = None
@@ -58,6 +62,10 @@ def upsert_reading(reading: SensorReading) -> bool:
     global _raw_columns_supported, _field_id_supported
     client = get_client()
     if client is None:
+        logger.error(
+            f"[Supabase] Cannot insert sensor reading for {reading.device_id} [{reading.field_id}]: "
+            f"Supabase is not configured. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env."
+        )
         return False
 
     row: Dict[str, Any] = {
@@ -83,49 +91,85 @@ def upsert_reading(reading: SensorReading) -> bool:
         if reading.ds18b20_address is not None:
             row["ds18b20_address"] = reading.ds18b20_address
 
+    logger.debug(
+        f"[Supabase] Attempting insert into 'sensor_readings' for {reading.device_id} [{reading.field_id}] "
+        f"(moisture={reading.soil_moisture}%, temp={reading.soil_temperature} C)"
+    )
+
     try:
         client.table("sensor_readings").insert(row).execute()
-        logger.info(f"Sensor reading stored for {reading.device_id} [{reading.field_id}]")
+        logger.info(f"[Supabase] Successfully stored sensor reading for {reading.device_id} [{reading.field_id}]")
         return True
     except Exception as e:
         err_msg = str(e)
-        is_schema_err = "column" in err_msg.lower() or "PGRST204" in err_msg
+        err_msg_lower = err_msg.lower()
+
+        # 1. Foreign Key Constraint: device_id missing in devices table
+        if "foreign key" in err_msg_lower or "devices" in err_msg_lower or "23503" in err_msg:
+            logger.warning(
+                f"[Supabase] Device '{reading.device_id}' not found in 'devices' table. "
+                f"Auto-registering device before inserting reading..."
+            )
+            try:
+                client.table("devices").upsert({
+                    "device_id":   reading.device_id,
+                    "device_name": f"MARUDAM Node {reading.device_id}",
+                    "status":      "CONNECTED",
+                    "updated_at":  datetime.now(tz=timezone.utc).isoformat(),
+                }, on_conflict="device_id").execute()
+                client.table("sensor_readings").insert(row).execute()
+                logger.info(f"[Supabase] Sensor reading stored for {reading.device_id} [{reading.field_id}] after auto-registering device.")
+                return True
+            except Exception as e_fk:
+                logger.error(f"[Supabase] Foreign key resolution failed for {reading.device_id}: {e_fk}")
+                return False
+
+        # 2. RLS Policy Violation / Table Permission Error: server role key not used
+        if "row-level security" in err_msg_lower or "rls" in err_msg_lower or "42501" in err_msg or "permission denied" in err_msg_lower:
+            logger.error(
+                f"[Supabase] RLS / Permission error on 'sensor_readings' for {reading.device_id} [{reading.field_id}]: {err_msg}. "
+                f"Check that SUPABASE_SERVICE_ROLE_KEY is set in backend/.env (not the anon/public key). "
+                f"The service role key is required to bypass RLS for server-side ingestion."
+            )
+            return False
+
+        # 3. Schema / Missing Columns Fallback
+        is_schema_err = "column" in err_msg_lower or "pgrst204" in err_msg_lower
         raw_cols_in_err = any(col in err_msg for col in ["soil_moisture_raw", "soil_moisture_voltage", "ds18b20_address"])
 
         if _raw_columns_supported and (raw_cols_in_err or is_schema_err):
             logger.warning(
-                "Supabase sensor_readings table lacks raw telemetry columns (soil_moisture_raw, etc.). "
+                "[Supabase] sensor_readings table lacks raw telemetry columns (soil_moisture_raw, etc.). "
                 "Retrying with core metrics while preserving field_id. Run schema_v4_two_field.sql to enable raw telemetry."
             )
             _raw_columns_supported = False
-            # Strip ONLY the optional raw columns — NEVER drop field_id!
             for k in ["soil_moisture_raw", "soil_moisture_voltage", "ds18b20_address"]:
                 row.pop(k, None)
 
             try:
                 client.table("sensor_readings").insert(row).execute()
-                logger.info(f"Sensor reading stored (with field_id={reading.field_id}) for {reading.device_id}")
+                logger.info(f"[Supabase] Sensor reading stored (with field_id={reading.field_id}) for {reading.device_id}")
                 return True
             except Exception as e2:
                 err_msg2 = str(e2)
                 if "field_id" in err_msg2 and _field_id_supported:
                     logger.error(
-                        "Supabase sensor_readings table is missing the 'field_id' column entirely! "
+                        "[Supabase] sensor_readings table is missing the 'field_id' column entirely! "
                         "Please run schema_v4_two_field.sql immediately to support two fields."
                     )
                     _field_id_supported = False
                     row.pop("field_id", None)
                     try:
                         client.table("sensor_readings").insert(row).execute()
-                        logger.warning(f"Sensor reading stored without field_id for {reading.device_id}")
+                        logger.warning(f"[Supabase] Sensor reading stored without field_id for {reading.device_id}")
                         return True
                     except Exception as e3:
-                        logger.error(f"Failed to store sensor reading after emergency fallback: {e3}")
+                        logger.error(f"[Supabase] Failed to store sensor reading after emergency fallback: {e3}")
                         return False
-                logger.error(f"Failed to store sensor reading after raw column removal: {e2}")
+                logger.error(f"[Supabase] Failed to store sensor reading after raw column removal: {e2}")
                 return False
 
-        logger.error(f"Failed to store sensor reading for {reading.device_id} [{reading.field_id}]: {e}")
+        logger.error(f"[Supabase] Failed to store sensor reading for {reading.device_id} [{reading.field_id}]: {e}")
         return False
 
 
@@ -302,7 +346,7 @@ def upsert_device_status(status: DeviceStatus) -> bool:
 
     try:
         client.table("devices").upsert(row, on_conflict="device_id").execute()
-        logger.info(f"Device status updated: {status.device_id} → {status.status}")
+        logger.info(f"[Supabase] Device status updated: {status.device_id} -> {status.status}")
         return True
     except Exception as e:
         logger.error(f"Failed to update device status: {e}")

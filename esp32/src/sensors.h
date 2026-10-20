@@ -236,33 +236,55 @@ public:
     if (has_ads1115) {
       r.status_ads1115 = SENSOR_OK;
 
-      // Field 1 Moisture (A0)
+      // ── Field 1 Moisture (A0) ──
       int16_t raw0 = ads.readADC_SingleEnded(ADS_CH_FIELD_1);
       float v0 = ads.computeVolts(raw0);
       r.field_1.soil_moisture_raw     = raw0;
       r.field_1.soil_moisture_voltage = v0;
-      r.field_1.status_moisture       = SENSOR_OK;
 
-      #if CALIBRATE_MOISTURE
-        float m1 = ((FIELD_1_VOLT_DRY - v0) / (FIELD_1_VOLT_DRY - FIELD_1_VOLT_WET)) * 100.0f;
-        r.field_1.soil_moisture = constrain(m1, 0.0f, 100.0f);
-      #else
-        r.field_1.soil_moisture = NAN; // Leave null until calibrated
-      #endif
+      // Check for disconnected sensor or grounding fault (raw count <= 100 or voltage < 0.05V)
+      if (raw0 <= 100 || v0 < 0.05f) {
+        r.field_1.status_moisture = SENSOR_ERROR;
+        r.field_1.soil_moisture   = NAN;
+      } else {
+        r.field_1.status_moisture = SENSOR_OK;
+        #if CALIBRATE_MOISTURE
+          float span1 = FIELD_1_VOLT_DRY - FIELD_1_VOLT_WET;
+          if (fabs(span1) > 0.05f) {
+            float m1 = ((FIELD_1_VOLT_DRY - v0) / span1) * 100.0f;
+            r.field_1.soil_moisture = constrain(m1, 0.0f, 100.0f);
+          } else {
+            r.field_1.soil_moisture = NAN; // Invalid equal calibration points
+          }
+        #else
+          r.field_1.soil_moisture = NAN; // Leave null/uncalibrated until physical points recorded
+        #endif
+      }
 
-      // Field 2 Moisture (A1)
+      // ── Field 2 Moisture (A1) ──
       int16_t raw1 = ads.readADC_SingleEnded(ADS_CH_FIELD_2);
       float v1 = ads.computeVolts(raw1);
       r.field_2.soil_moisture_raw     = raw1;
       r.field_2.soil_moisture_voltage = v1;
-      r.field_2.status_moisture       = SENSOR_OK;
 
-      #if CALIBRATE_MOISTURE
-        float m2 = ((FIELD_2_VOLT_DRY - v1) / (FIELD_2_VOLT_DRY - FIELD_2_VOLT_WET)) * 100.0f;
-        r.field_2.soil_moisture = constrain(m2, 0.0f, 100.0f);
-      #else
-        r.field_2.soil_moisture = NAN; // Leave null until calibrated
-      #endif
+      // Check for disconnected sensor or grounding fault
+      if (raw1 <= 100 || v1 < 0.05f) {
+        r.field_2.status_moisture = SENSOR_ERROR;
+        r.field_2.soil_moisture   = NAN;
+      } else {
+        r.field_2.status_moisture = SENSOR_OK;
+        #if CALIBRATE_MOISTURE
+          float span2 = FIELD_2_VOLT_DRY - FIELD_2_VOLT_WET;
+          if (fabs(span2) > 0.05f) {
+            float m2 = ((FIELD_2_VOLT_DRY - v1) / span2) * 100.0f;
+            r.field_2.soil_moisture = constrain(m2, 0.0f, 100.0f);
+          } else {
+            r.field_2.soil_moisture = NAN; // Invalid equal calibration points
+          }
+        #else
+          r.field_2.soil_moisture = NAN; // Leave null/uncalibrated until physical points recorded
+        #endif
+      }
     } else {
       r.status_ads1115                = SENSOR_UNAVAILABLE;
       r.field_1.soil_moisture_raw     = -1;

@@ -356,7 +356,7 @@ export const sanskrit: Translations = {
     "suggested4": "मम क्षेत्रे सामान्यात् किं भिन्नम् अस्ति?",
     "suggested5": "MARUDAM मम क्षेत्रं कथं शिक्षते?",
     "suggested6": "मम मृदायाः आर्द्रतामूल्यस्य कः अर्थः?",
-    "errorNotConfigured": "एआई-सहायकः अद्यापि विन्यस्तः नास्ति। कृपया OPENAI_API_KEY स्थापयतु।",
+    "errorNotConfigured": "एआई-सहायकः अद्यापि विन्यस्तः नास्ति। कृपया GEMINI_API_KEY स्थापयतु।",
     "errorGeneral": "किञ्चिद् दोषः अभवत्। पुनः प्रयासः क्रियताम्।",
     "emptyState": "मां स्वक्षेत्रविषये किमपि पृच्छतु।"
   },

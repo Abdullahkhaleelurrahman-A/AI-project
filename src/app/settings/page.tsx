@@ -5,6 +5,6 @@ export const metadata = {
 };
 
 export default function SettingsPage() {
-  const hasAi = !!process.env.OPENAI_API_KEY;
+  const hasAi = !!process.env.GEMINI_API_KEY;
   return <SettingsClient hasAi={hasAi} />;
 }

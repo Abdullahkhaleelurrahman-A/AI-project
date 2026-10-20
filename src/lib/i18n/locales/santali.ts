@@ -192,7 +192,7 @@ export const santali: Translations = {
     suggested4: 'ᱤᱧᱟᱜ ᱠᱷᱮᱛ ᱨᱮ ᱥᱟᱫᱷᱟᱨᱚᱱ ᱠᱷᱚᱱ ᱪᱮᱫ ᱵᱷᱮᱜᱟᱨ ᱢᱮᱱᱟᱜᱼᱟ?',
     suggested5: 'MARUDAM ᱤᱧᱟᱜ ᱠᱷᱮᱛ ᱪᱮᱫ ᱞᱮᱠᱟᱭ ᱪᱮᱫᱚᱜ ᱠᱟᱱᱟ?',
     suggested6: 'ᱤᱧᱟᱜ ᱦᱟᱥᱟ ᱨᱮᱭᱟᱜ ᱫᱟᱜ ᱵᱷᱮᱞᱭᱩ ᱨᱮᱭᱟᱜ ᱢᱮᱱᱮᱛ ᱪᱮᱫ ᱠᱟᱱᱟ?',
-    errorNotConfigured: 'ᱮᱟᱭ ᱟᱥᱤᱥᱴᱮᱱᱴ ᱱᱤᱛ ᱦᱚᱸ ᱵᱟᱝ ᱠᱚᱱᱯᱷᱤᱜᱟᱨ ᱟᱠᱟᱱᱟ᱾ ᱫᱟᱭᱟ ᱠᱟᱛᱮ OPENAI_API_KEY ᱥᱮᱴ ᱢᱮ᱾',
+    errorNotConfigured: 'ᱮᱟᱭ ᱟᱥᱤᱥᱴᱮᱱᱴ ᱱᱤᱛ ᱦᱚᱸ ᱵᱟᱝ ᱠᱚᱱᱯᱷᱤᱜᱟᱨ ᱟᱠᱟᱱᱟ᱾ ᱫᱟᱭᱟ ᱠᱟᱛᱮ GEMINI_API_KEY ᱥᱮᱴ ᱢᱮ᱾',
     errorGeneral: 'ᱪᱮᱫ ᱪᱚ ᱵᱷᱩᱞ ᱮᱱᱟ᱾ ᱫᱟᱭᱟ ᱠᱟᱛᱮ ᱫᱚᱦᱲᱟ ᱪᱮᱥᱴᱟᱭ ᱢᱮ᱾',
     emptyState: 'ᱤᱧ ᱟᱢᱟᱜ ᱠᱷᱮᱛ ᱵᱟᱵᱚᱛ ᱡᱟᱦᱟᱸᱱᱟᱜ ᱜᱮ ᱠᱩᱞᱤ ᱤᱧ ᱢᱮ᱾',
   },

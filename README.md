@@ -45,7 +45,7 @@ crop-monitor/                    ← Next.js application root
 │   │   ├── register/
 │   │   ├── settings/
 │   │   ├── help/
-│   │   └── api/chat/            ← OpenAI chatbot API route
+│   │   └── api/chat/            ← Gemini chatbot API route
 │   ├── components/              ← React components
 │   ├── lib/
 │   │   ├── supabase/
@@ -224,7 +224,7 @@ Edit `.env.local` (Frontend):
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=eyJhbGciOi...
 NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-OPENAI_API_KEY=               # Optional: for AI chatbot
+GEMINI_API_KEY=               # Optional: for AI chatbot
 ```
 
 Edit `backend/.env` (Backend):

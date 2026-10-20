@@ -26,6 +26,9 @@ def get_status() -> DeviceStatus:
     return _state
 
 
+_last_db_sync: float = 0
+
+
 def update_status(
     new_status: str,
     serial_port: Optional[str] = None,
@@ -35,7 +38,7 @@ def update_status(
     Update device status. If it changed from the previous value,
     log a device event to Supabase and emit a console log.
     """
-    global _prev_status
+    global _prev_status, _last_db_sync
 
     _state.status      = new_status  # type: ignore[assignment]
     _state.updated_at  = datetime.now(tz=timezone.utc)
@@ -46,12 +49,17 @@ def update_status(
     if last_seen is not None:
         _state.last_seen = last_seen
 
-    # Only act on transitions
+    # Only act on transitions (or periodic 30s heartbeat)
     if new_status == _prev_status:
-        supa.upsert_device_status(_state)
+        now_ts = time.time()
+        if now_ts - _last_db_sync >= 30:
+            supa.upsert_device_status(_state)
+            _last_db_sync = now_ts
         return
 
-    logger.info(f"Device status: {_prev_status} → {new_status}")
+    _last_db_sync = time.time()
+
+    logger.info(f"Device status: {_prev_status} -> {new_status}")
 
     # Map status to event type
     event_type_map = {

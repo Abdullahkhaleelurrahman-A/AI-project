@@ -192,7 +192,7 @@ export const sindhi: Translations = {
     suggested4: 'منهنجي فيلڊ ۾ عام کان ڇا مختلف آهي؟',
     suggested5: 'مارودم منهنجي فيلڊ ڪيئن سکي رهيو آهي؟',
     suggested6: 'منهنجي مٽي جي نمي جي قيمت جو ڇا مطلب آهي؟',
-    errorNotConfigured: 'اي آءِ اسسٽنٽ اڃا ڪنفيگر ناهي ٿيو. مهرباني ڪري OPENAI_API_KEY سيٽ ڪريو.',
+    errorNotConfigured: 'اي آءِ اسسٽنٽ اڃا ڪنفيگر ناهي ٿيو. مهرباني ڪري GEMINI_API_KEY سيٽ ڪريو.',
     errorGeneral: 'ڪجهه غلط ٿي ويو. مهرباني ڪري ٻيهر ڪوشش ڪريو.',
     emptyState: 'مون کان پنهنجي فيلڊ بابت ڪجهه به پڇو.',
   },

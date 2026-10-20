@@ -2,35 +2,88 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
-import MarudamHeader from '@/components/layout/MarudamHeader';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
+import AppShell from '@/components/layout/AppShell';
 import { type Language, getTranslations } from '@/lib/i18n/translations';
+import { getCropName, estimateGrowthStageId, getCropStageName } from '@/lib/data/db';
+import { getStoredFarmProfile, buildFarmContext, FARM_PROFILE_UPDATED_EVENT } from '@/lib/data/farmProfile';
 
 export default function HelpClient() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [language, setLanguage] = useState<Language>('English');
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [farmContext, setFarmContext] = useState<any>(null);
 
   const t = useMemo(() => getTranslations(language), [language]);
 
   const loadProfile = useCallback(async () => {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push('/login'); return; }
+    const stored = getStoredFarmProfile();
+    const devId = stored.device_id || 'FIELD_001';
+    setDeviceId(devId);
+    setFarmContext(buildFarmContext(stored, language));
 
-    const { data: profile } = await supabase.from('profiles').select('language').eq('user_id', user.id).single();
-    if (profile) {
-      setLanguage((profile.language as Language) ?? 'English');
+    if (typeof window !== 'undefined') {
+      const storedLang = localStorage.getItem('marudam-lang');
+      if (storedLang) setLanguage(storedLang as Language);
     }
-    setLoading(false);
-  }, [router]);
+
+    if (!isSupabaseConfigured()) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const supabase = createClient();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !user) {
+        setLoading(false);
+        return;
+      }
+
+      const { data: profile } = await supabase.from('profiles').select('language').eq('user_id', user.id).single();
+      if (profile?.language) {
+        setLanguage((profile.language as Language) ?? 'English');
+      }
+
+      const { data: farm } = await supabase.from('farms')
+        .select('state, district, crop_id, sowing_date, device_id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false }).limit(1).single();
+
+      if (farm) {
+        const farmDevId = farm.device_id ?? 'FIELD_001';
+        setDeviceId(farmDevId);
+        setFarmContext({
+          cropName: getCropName(farm.crop_id, (profile?.language as Language) ?? 'English'),
+          district: farm.district,
+          state: farm.state,
+          deviceId: farmDevId,
+          growthStage: getCropStageName(farm.crop_id, estimateGrowthStageId(farm.crop_id, farm.sowing_date), (profile?.language as Language) ?? 'English')
+        });
+      }
+    } catch {
+      // offline fallback
+    } finally {
+      setLoading(false);
+    }
+  }, [language]);
 
   useEffect(() => {
-    const init = async () => {
-      await loadProfile();
+    loadProfile();
+
+    const handleUpdate = () => {
+      const stored = getStoredFarmProfile();
+      setDeviceId(stored.device_id || 'FIELD_001');
+      setFarmContext(buildFarmContext(stored, language));
     };
-    init();
-  }, [loadProfile]);
+    window.addEventListener(FARM_PROFILE_UPDATED_EVENT, handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener(FARM_PROFILE_UPDATED_EVENT, handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
+  }, [loadProfile, language]);
 
   const handleLanguageChange = async (newLang: Language) => {
     setLanguage(newLang);
@@ -42,58 +95,64 @@ export default function HelpClient() {
   };
 
   const handleLogout = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured()) {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+    }
     router.push('/login');
   };
 
   if (loading) {
-    return <div style={{minHeight:'100svh', background:'var(--bg-base)', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-muted)'}}>{t.common.loading}</div>;
+    return <div style={{ minHeight: '100svh', background: 'var(--bg-base)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>{t.common.loading}</div>;
   }
 
-  // Common styles for the Help Center
+  // Common styles for the Help Center matching History page design system
   const sectionStyle = {
-    background:'var(--bg-panel)', 
-    border:'1px solid var(--border-very-subtle)', 
-    borderRadius:'1rem', 
-    padding:'2rem',
+    background: 'var(--bg-card)', 
+    border: '1px solid var(--border-subtle)', 
+    borderRadius: 'var(--radius-lg, 0.75rem)', 
+    padding: '1.75rem',
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '1.5rem'
+    gap: '1.5rem',
   };
 
   const titleStyle = {
-    fontSize:'1.3rem', 
-    fontWeight:700, 
-    color:'var(--brand-primary)', 
+    fontSize: '1.25rem', 
+    fontWeight: 700, 
+    color: 'var(--brand-primary)', 
     margin: 0,
-    borderBottom: '1px solid var(--border-brand-subtle)',
-    paddingBottom: '1rem'
+    borderBottom: '1px solid var(--border-subtle)',
+    paddingBottom: '0.875rem',
   };
 
   const subheadingStyle = {
     fontSize: '1rem',
     fontWeight: 600,
     color: 'var(--text-primary)',
-    margin: '0 0 0.5rem 0'
+    margin: '0 0 0.5rem 0',
   };
 
   const pStyle = {
     margin: 0,
     fontSize: '0.95rem',
     color: 'var(--text-secondary)',
-    lineHeight: 1.6
+    lineHeight: 1.6,
   };
 
   return (
-    <div style={{ minHeight:'100svh', background:'var(--bg-base)', color:'var(--text-primary)', display:'flex', flexDirection:'column', fontFamily:'system-ui, -apple-system, sans-serif' }}>
-      <MarudamHeader activeRoute="help" language={language} onLanguageChange={handleLanguageChange} onLogout={handleLogout} />
-
-      <main style={{ flex:1, padding:'clamp(1.5rem, 5vw, 3rem)', maxWidth:'900px', margin:'0 auto', width:'100%', display:'flex', flexDirection:'column', gap:'2.5rem' }}>
-        
+    <AppShell
+      activeRoute="/help"
+      language={language}
+      onLanguageChange={handleLanguageChange}
+      onLogout={handleLogout}
+      pageTitle={t.helpCenter.title || 'Help Center'}
+      farmContext={farmContext}
+    >
+      <div className="mrd-content" style={{ maxWidth: '1000px', margin: '0 auto', width: '100%', padding: 'clamp(1.5rem, 4vw, 2.5rem)', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
         <div>
-          <h1 style={{ fontSize:'2.5rem', fontWeight:800, margin:'0 0 0.5rem 0', color:'var(--text-primary)' }}>{t.helpCenter.title}</h1>
-          <p style={{ color:'var(--text-muted)', margin:0 }}>Your comprehensive guide to using the Marudam system.</p>
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, margin: '0 0 0.5rem 0', color: 'var(--text-primary)' }}>{t.helpCenter.title}</h1>
+          <p style={{ color: 'var(--text-muted)', margin: 0 }}>Your comprehensive guide to using the Marudam system.</p>
         </div>
 
         {/* GETTING STARTED */}
@@ -120,26 +179,26 @@ export default function HelpClient() {
         <section style={sectionStyle}>
           <h2 style={titleStyle}>{t.helpCenter.sensors}</h2>
           <p style={pStyle}>{t.helpCenter.howSensorsWork}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '0.5rem' }}>
-            <div style={{ background:'var(--bg-input)', padding:'1rem', borderRadius:'0.5rem' }}>
-              <h4 style={{ margin:'0 0 0.25rem 0', color:'#4ade80' }}>{t.helpCenter.soilMoisture}</h4>
-              <p style={{ margin:0, fontSize:'0.85rem', color:'var(--text-secondary)' }}>Measures the volumetric water content in the soil.</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginTop: '0.5rem' }}>
+            <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-very-subtle)' }}>
+              <h4 style={{ margin: '0 0 0.25rem 0', color: 'var(--status-normal, #16a34a)', fontWeight: 600 }}>{t.helpCenter.soilMoisture}</h4>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Measures the volumetric water content in the soil.</p>
             </div>
-            <div style={{ background:'var(--bg-input)', padding:'1rem', borderRadius:'0.5rem' }}>
-              <h4 style={{ margin:'0 0 0.25rem 0', color:'#4ade80' }}>{t.helpCenter.soilTemp}</h4>
-              <p style={{ margin:0, fontSize:'0.85rem', color:'var(--text-secondary)' }}>Monitors root zone temperature for crop health.</p>
+            <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-very-subtle)' }}>
+              <h4 style={{ margin: '0 0 0.25rem 0', color: 'var(--status-normal, #16a34a)', fontWeight: 600 }}>{t.helpCenter.soilTemp}</h4>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Monitors root zone temperature for crop health.</p>
             </div>
-            <div style={{ background:'var(--bg-input)', padding:'1rem', borderRadius:'0.5rem' }}>
-              <h4 style={{ margin:'0 0 0.25rem 0', color:'#4ade80' }}>{t.helpCenter.lightIntensity}</h4>
-              <p style={{ margin:0, fontSize:'0.85rem', color:'var(--text-secondary)' }}>Measures sunlight available for photosynthesis.</p>
+            <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-very-subtle)' }}>
+              <h4 style={{ margin: '0 0 0.25rem 0', color: 'var(--status-normal, #16a34a)', fontWeight: 600 }}>{t.helpCenter.lightIntensity}</h4>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Measures sunlight available for photosynthesis.</p>
             </div>
-            <div style={{ background:'var(--bg-input)', padding:'1rem', borderRadius:'0.5rem' }}>
-              <h4 style={{ margin:'0 0 0.25rem 0', color:'#4ade80' }}>{t.helpCenter.airHumidity}</h4>
-              <p style={{ margin:0, fontSize:'0.85rem', color:'var(--text-secondary)' }}>Tracks moisture in the air to predict disease risk.</p>
+            <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-very-subtle)' }}>
+              <h4 style={{ margin: '0 0 0.25rem 0', color: 'var(--status-normal, #16a34a)', fontWeight: 600 }}>{t.helpCenter.airHumidity}</h4>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Tracks moisture in the air to predict disease risk.</p>
             </div>
-            <div style={{ background:'var(--bg-input)', padding:'1rem', borderRadius:'0.5rem' }}>
-              <h4 style={{ margin:'0 0 0.25rem 0', color:'#4ade80' }}>{t.helpCenter.surroundingTemp}</h4>
-              <p style={{ margin:0, fontSize:'0.85rem', color:'var(--text-secondary)' }}>Ambient temperature affecting crop growth and evaporation.</p>
+            <div style={{ background: 'var(--bg-input)', padding: '1rem', borderRadius: '0.5rem', border: '1px solid var(--border-very-subtle)' }}>
+              <h4 style={{ margin: '0 0 0.25rem 0', color: 'var(--status-normal, #16a34a)', fontWeight: 600 }}>{t.helpCenter.surroundingTemp}</h4>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Ambient temperature affecting crop growth and evaporation.</p>
             </div>
           </div>
         </section>
@@ -154,7 +213,7 @@ export default function HelpClient() {
             </p>
           </div>
           <div>
-            <h3 style={subheadingStyle}>{t.helpCenter.confidence} & {t.helpCenter.urgency}</h3>
+            <h3 style={subheadingStyle}>{t.helpCenter.confidence} &amp; {t.helpCenter.urgency}</h3>
             <p style={pStyle}>
               Each recommendation shows a confidence level (e.g. 95%), which represents how sure the AI is about the advice based on historical and sensor data. The urgency dictates if action is needed today or later.
             </p>
@@ -211,8 +270,7 @@ export default function HelpClient() {
             </p>
           </div>
         </section>
-
-      </main>
-    </div>
+      </div>
+    </AppShell>
   );
 }

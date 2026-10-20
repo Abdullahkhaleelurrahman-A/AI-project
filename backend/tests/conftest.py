@@ -67,4 +67,7 @@ supa_stub.get_latest_reading            = MagicMock(return_value=None)
 supa_stub.get_recent_anomalies          = MagicMock(return_value=[])
 supa_stub.get_latest_two_field_readings = MagicMock(return_value={"field_1": None, "field_2": None})
 supa_stub.get_client                    = MagicMock(return_value=None)
+supa_stub.upsert_device_status          = MagicMock(return_value=True)
+supa_stub.log_device_event              = MagicMock(return_value=True)
+supa_stub.get_device_status_from_supabase = MagicMock(return_value=None)
 sys.modules["app.services.supabase_service"] = supa_stub

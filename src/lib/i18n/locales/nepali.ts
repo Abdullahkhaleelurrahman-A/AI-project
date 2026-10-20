@@ -192,7 +192,7 @@ export const nepali: Translations = {
     suggested4: 'मेरो खेतमा सामान्य भन्दा के फरक छ?',
     suggested5: 'MARUDAM ले मेरो खेत कसरी सिक्दैछ?',
     suggested6: 'मेरो माटोको चिस्यान मानको अर्थ के हो?',
-    errorNotConfigured: 'AI सहायक अझै कन्फिगर गरिएको छैन। कृपया OPENAI_API_KEY सेट गर्नुहोस्।',
+    errorNotConfigured: 'AI सहायक अझै कन्फिगर गरिएको छैन। कृपया GEMINI_API_KEY सेट गर्नुहोस्।',
     errorGeneral: 'केही गल्ती भयो। कृपया फेरि प्रयास गर्नुहोस्।',
     emptyState: 'मलाई तपाईंको खेतको बारेमा केहि सोध्नुहोस्।',
   },

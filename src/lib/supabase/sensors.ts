@@ -7,7 +7,7 @@
 // NEVER import the service-role key here.
 // =============================================================================
 
-import { createClient } from '@/lib/supabase/client';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
 export interface SensorReading {
   id: string;
@@ -57,40 +57,56 @@ export async function fetchLatestReading(
   deviceId: string,
   fieldId?: string
 ): Promise<SensorReading | null> {
-  const supabase = createClient();
-  let query = supabase
-    .from('sensor_readings')
-    .select('*')
-    .eq('device_id', deviceId);
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const supabase = createClient();
+    let query = supabase
+      .from('sensor_readings')
+      .select('*')
+      .eq('device_id', deviceId);
 
-  if (fieldId) {
-    query = query.eq('field_id', fieldId);
+    if (fieldId) {
+      query = query.eq('field_id', fieldId);
+    }
+
+    // Exclude future-dated or corrupt timestamps (bound to <= current time + 60s buffer)
+    const maxValidTimestamp = new Date(Date.now() + 60000).toISOString();
+    query = query.lte('timestamp', maxValidTimestamp);
+
+    const { data, error } = await query
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data as SensorReading;
+  } catch {
+    return null;
   }
-
-  const { data, error } = await query
-    .order('timestamp', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data) return null;
-  return data as SensorReading;
 }
 
 export async function fetchLatestTwoFieldReadings(
   deviceId: string
 ): Promise<{ field_1: SensorReading | null; field_2: SensorReading | null }> {
-  const [f1, f2] = await Promise.all([
-    fetchLatestReading(deviceId, 'field_1'),
-    fetchLatestReading(deviceId, 'field_2'),
-  ]);
-
-  // Graceful fallback: If no field_id column or tagged rows yet,
-  // return generic latest reading as field_1
-  if (!f1 && !f2) {
-    const generic = await fetchLatestReading(deviceId);
-    return { field_1: generic, field_2: null };
+  if (!isSupabaseConfigured()) {
+    return { field_1: null, field_2: null };
   }
-  return { field_1: f1, field_2: f2 };
+  try {
+    const [f1, f2] = await Promise.all([
+      fetchLatestReading(deviceId, 'field_1'),
+      fetchLatestReading(deviceId, 'field_2'),
+    ]);
+
+    // Graceful fallback: If no field_id column or tagged rows yet,
+    // return generic latest reading as field_1
+    if (!f1 && !f2) {
+      const generic = await fetchLatestReading(deviceId);
+      return { field_1: generic, field_2: null };
+    }
+    return { field_1: f1, field_2: f2 };
+  } catch {
+    return { field_1: null, field_2: null };
+  }
 }
 
 // ─── Reading history ──────────────────────────────────────────────────────────
@@ -100,22 +116,27 @@ export async function fetchReadingHistory(
   limit = 100,
   fieldId?: string
 ): Promise<SensorReading[]> {
-  const supabase = createClient();
-  let query = supabase
-    .from('sensor_readings')
-    .select('*')
-    .eq('device_id', deviceId);
+  if (!isSupabaseConfigured()) return [];
+  try {
+    const supabase = createClient();
+    let query = supabase
+      .from('sensor_readings')
+      .select('*')
+      .eq('device_id', deviceId);
 
-  if (fieldId) {
-    query = query.eq('field_id', fieldId);
+    if (fieldId) {
+      query = query.eq('field_id', fieldId);
+    }
+
+    const { data, error } = await query
+      .order('timestamp', { ascending: false })
+      .limit(limit);
+
+    if (error || !data) return [];
+    return data as SensorReading[];
+  } catch {
+    return [];
   }
-
-  const { data, error } = await query
-    .order('timestamp', { ascending: false })
-    .limit(limit);
-
-  if (error || !data) return [];
-  return data as SensorReading[];
 }
 
 // ─── Anomalies ────────────────────────────────────────────────────────────────
@@ -125,22 +146,27 @@ export async function fetchRecentAnomalies(
   limit = 20,
   fieldId?: string
 ): Promise<Anomaly[]> {
-  const supabase = createClient();
-  let query = supabase
-    .from('anomalies')
-    .select('*')
-    .eq('device_id', deviceId);
+  if (!isSupabaseConfigured()) return [];
+  try {
+    const supabase = createClient();
+    let query = supabase
+      .from('anomalies')
+      .select('*')
+      .eq('device_id', deviceId);
 
-  if (fieldId) {
-    query = query.eq('field_id', fieldId);
+    if (fieldId) {
+      query = query.eq('field_id', fieldId);
+    }
+
+    const { data, error } = await query
+      .order('timestamp', { ascending: false })
+      .limit(limit);
+
+    if (error || !data) return [];
+    return data as Anomaly[];
+  } catch {
+    return [];
   }
-
-  const { data, error } = await query
-    .order('timestamp', { ascending: false })
-    .limit(limit);
-
-  if (error || !data) return [];
-  return data as Anomaly[];
 }
 
 // ─── Device status ────────────────────────────────────────────────────────────
@@ -148,15 +174,20 @@ export async function fetchRecentAnomalies(
 export async function fetchDeviceStatus(
   deviceId: string
 ): Promise<DeviceRow | null> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('devices')
-    .select('*')
-    .eq('device_id', deviceId)
-    .maybeSingle();
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from('devices')
+      .select('*')
+      .eq('device_id', deviceId)
+      .maybeSingle();
 
-  if (error || !data) return null;
-  return data as DeviceRow;
+    if (error || !data) return null;
+    return data as DeviceRow;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Realtime subscriptions ───────────────────────────────────────────────────
@@ -169,29 +200,37 @@ export function subscribeToReadings(
   deviceId: string,
   onReading: (reading: SensorReading) => void
 ): () => void {
-  const supabase = createClient();
+  if (!isSupabaseConfigured()) return () => {};
 
-  const channel = supabase
-    .channel(`sensor_readings:${deviceId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'sensor_readings',
-        filter: `device_id=eq.${deviceId}`,
-      },
-      (payload) => {
-        if (payload.new) {
-          onReading(payload.new as SensorReading);
+  try {
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`sensor_readings:${deviceId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'sensor_readings',
+          filter: `device_id=eq.${deviceId}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            onReading(payload.new as SensorReading);
+          }
         }
-      }
-    )
-    .subscribe();
+      )
+      .subscribe();
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
+    return () => {
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
+    };
+  } catch {
+    return () => {};
+  }
 }
 
 /**
@@ -201,29 +240,37 @@ export function subscribeToAnomalies(
   deviceId: string,
   onAnomaly: (anomaly: Anomaly) => void
 ): () => void {
-  const supabase = createClient();
+  if (!isSupabaseConfigured()) return () => {};
 
-  const channel = supabase
-    .channel(`anomalies:${deviceId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'anomalies',
-        filter: `device_id=eq.${deviceId}`,
-      },
-      (payload) => {
-        if (payload.new) {
-          onAnomaly(payload.new as Anomaly);
+  try {
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`anomalies:${deviceId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'anomalies',
+          filter: `device_id=eq.${deviceId}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            onAnomaly(payload.new as Anomaly);
+          }
         }
-      }
-    )
-    .subscribe();
+      )
+      .subscribe();
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
+    return () => {
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
+    };
+  } catch {
+    return () => {};
+  }
 }
 
 /**
@@ -233,27 +280,35 @@ export function subscribeToDeviceStatus(
   deviceId: string,
   onStatusChange: (device: DeviceRow) => void
 ): () => void {
-  const supabase = createClient();
+  if (!isSupabaseConfigured()) return () => {};
 
-  const channel = supabase
-    .channel(`devices:${deviceId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'devices',
-        filter: `device_id=eq.${deviceId}`,
-      },
-      (payload) => {
-        if (payload.new) {
-          onStatusChange(payload.new as DeviceRow);
+  try {
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`devices:${deviceId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'devices',
+          filter: `device_id=eq.${deviceId}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            onStatusChange(payload.new as DeviceRow);
+          }
         }
-      }
-    )
-    .subscribe();
+      )
+      .subscribe();
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
+    return () => {
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
+    };
+  } catch {
+    return () => {};
+  }
 }

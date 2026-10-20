@@ -356,7 +356,7 @@ export const odia: Translations = {
     "suggested4": "ମୋ ଜମିରେ ସାଧାରଣଠାରୁ କ’ଣ ଭିନ୍ନ ଅଛି?",
     "suggested5": "Marudam ମୋ ଜମି ବିଷୟରେ କିପରି ଶିଖୁଛି?",
     "suggested6": "ମୋ ମାଟିର ଆ୍ର୍ଦ୍ରତା ମାପର ଅର୍ଥ କ’ଣ?",
-    "errorNotConfigured": "AI ସହାୟକ ଏପର୍ଯ୍ୟନ୍ତ କନଫିଗର ହୋଇନାହିଁ। ଦୟାକରି OPENAI_API_KEY ସେଟ୍ କରନ୍ତୁ।",
+    "errorNotConfigured": "AI ସହାୟକ ଏପର୍ଯ୍ୟନ୍ତ କନଫିଗର ହୋଇନାହିଁ। ଦୟାକରି GEMINI_API_KEY ସେଟ୍ କରନ୍ତୁ।",
     "errorGeneral": "କିଛି ଅସୁବିଧା ହେଲା। ଦୟାକରି ପୁଣି ଚେଷ୍ଟା କରନ୍ତୁ।",
     "emptyState": "ଆପଣଙ୍କ ଜମି ବିଷୟରେ ମୋତେ ଯେକୌଣସି ପ୍ରଶ୍ନ ପଚାରନ୍ତୁ।"
   },

@@ -28,6 +28,7 @@ import serial.tools.list_ports
 
 from app.config import settings
 from app.models.sensor import ESP32Packet, SensorStatus, FieldSoilData, SharedAtmosphericData
+from app.services import device_service
 from app.utils.logger import get_logger
 
 logger = get_logger("serial_manager")
@@ -76,6 +77,30 @@ def get_device_status() -> dict:
 
 def get_last_packet() -> Optional[dict]:
     return _last_packet
+
+
+def inject_wifi_packet(packet: ESP32Packet) -> None:
+    """
+    Called when a valid ESP32 packet arrives over Wi-Fi (HTTP POST).
+    Updates the same global state and fires the same callback as USB serial,
+    so the rest of the pipeline (Supabase, anomaly detection, AI) works
+    identically regardless of transport.
+    """
+    global _last_packet, _last_seen, _device_status, _current_port
+
+    pkt_dict = packet.model_dump()
+    pkt_dict["received_at"] = datetime.now(tz=timezone.utc).isoformat()
+    _last_packet   = pkt_dict
+    _last_seen     = time.time()
+    _device_status = "CONNECTED"
+    _current_port  = "WIFI"
+    device_service.update_status("CONNECTED", serial_port="WIFI", last_seen=datetime.now(tz=timezone.utc))
+
+    if _on_packet_cb:
+        try:
+            _on_packet_cb(packet)
+        except Exception as e:
+            logger.error(f"Wi-Fi packet callback error: {e}")
 
 
 def set_packet_callback(cb: Callable[[ESP32Packet], None]) -> None:
@@ -162,13 +187,15 @@ def parse_json_line(raw_line: str) -> Optional[ESP32Packet]:
     if not line:
         return None
 
-    # Ignore lines that do not start with a JSON object delimiter
-    if not line.startswith("{"):
-        logger.debug(f"Ignoring non-JSON serial line: {line[:80]}")
+    # Handle optional leading/trailing garbage bytes around JSON object
+    start_idx = line.find("{")
+    end_idx = line.rfind("}")
+    if start_idx == -1 or end_idx <= start_idx:
         return None
 
+    json_str = line[start_idx:end_idx+1]
     try:
-        data = json.loads(line)
+        data = json.loads(json_str)
         if not isinstance(data, dict):
             logger.error("JSON payload is not a dictionary object")
             return None
@@ -200,40 +227,67 @@ def parse_text_line(raw_line: str) -> Optional[ESP32Packet]:
         return None
 
     # Track probe discovery lines from bootup
-    if m := re.search(r'Probe 1 address:\s*([0-9A-Fa-f]+)', line_clean):
+    if m := re.search(r'Probe\s+1\s+address:\s*([0-9A-Fa-f]+)', line_clean, re.I):
         _discovered_probe_1 = m.group(1).upper()
         logger.info(f"Discovered Probe 1 hardware address: {_discovered_probe_1}")
         return None
-    if m := re.search(r'Probe 2 address:\s*([0-9A-Fa-f]+)', line_clean):
+    if m := re.search(r'Probe\s+2\s+address:\s*([0-9A-Fa-f]+)', line_clean, re.I):
         _discovered_probe_2 = m.group(1).upper()
         logger.info(f"Discovered Probe 2 hardware address: {_discovered_probe_2}")
         return None
 
-    if "----- SENSOR READINGS -----" in line_clean:
+    # Header delimiter (matches ====== SENSOR READINGS ====== or ------ SENSOR READINGS ------)
+    if re.search(r'[-=~*]{2,}\s*SENSOR READINGS\s*[-=~*]{2,}', line_clean, re.I):
         _text_block_buffer = []
         return None
 
     if _text_block_buffer is not None:
         _text_block_buffer.append(line_clean)
-        # End of reading block reached
-        if "---------------------------" in line_clean or len(_text_block_buffer) >= 14:
+        # End of reading block reached: footer line with 5+ dashes/equals or buffer filled
+        if re.search(r'^[-=~*]{5,}$', line_clean) or len(_text_block_buffer) >= 14:
             text = "\n".join(_text_block_buffer)
             _text_block_buffer = []
 
-            t_air = float(m.group(1)) if (m := re.search(r'Air temperature:\s*([\d\.\-]+)', text)) else None
-            rh    = float(m.group(1)) if (m := re.search(r'Air humidity:\s*([\d\.\-]+)', text)) else None
-            lux   = float(m.group(1)) if (m := re.search(r'Light intensity:\s*([\d\.\-]+)', text)) else None
+            t_air = float(m.group(1)) if (m := re.search(r'Air\s+temperature:\s*([\d\.\-]+)', text, re.I)) else None
+            rh    = float(m.group(1)) if (m := re.search(r'Air\s+humidity:\s*([\d\.\-]+)', text, re.I)) else None
+            lux   = float(m.group(1)) if (m := re.search(r'Light(?:\s+intensity)?:\s*([\d\.\-]+)', text, re.I)) else None
 
-            m1_raw = int(m.group(1)) if (m := re.search(r'Moisture sensor 1 - A0 raw:\s*(\d+)', text)) else None
-            m1_v   = float(m.group(1)) if (m := re.search(r'Moisture sensor 1 - A0 raw:\s*\d+,\s*voltage:\s*([\d\.\-]+)', text)) else None
-            m2_raw = int(m.group(1)) if (m := re.search(r'Moisture sensor 2 - A1 raw:\s*(\d+)', text)) else None
-            m2_v   = float(m.group(1)) if (m := re.search(r'Moisture sensor 2 - A1 raw:\s*\d+,\s*voltage:\s*([\d\.\-]+)', text)) else None
+            # Moisture sensor 1: raw counts, estimated %, and voltage
+            m1_raw = int(m.group(1)) if (m := re.search(r'(?:Moisture\s+Sensor\s+1|MOISTURE_1).*?(?:RAW|raw)(?:\s+value)?:\s*(\d+)', text, re.I)) else None
+            m1_pct = None
+            if m := re.search(r'(?:Moisture\s+Sensor\s+1|MOISTURE_1).*?(?:percent|relative\s+moisture|estimated).*?:\s*([\d\.\-]+)', text, re.I):
+                m1_pct = float(m.group(1))
+            elif m := re.search(r'(?:Moisture\s+Sensor\s+1|MOISTURE_1)[^:\n]*:\s*([\d\.\-]+)\s*%', text, re.I):
+                m1_pct = float(m.group(1))
 
-            t_s1 = float(m.group(1)) if (m := re.search(r'Soil temperature probe 1:\s*([\d\.\-]+)', text)) else None
-            t_s2 = float(m.group(1)) if (m := re.search(r'Soil temperature probe 2:\s*([\d\.\-]+)', text)) else None
+            m1_v = float(m.group(1)) if (m := re.search(r'(?:Moisture\s+Sensor\s+1|MOISTURE_1).*?voltage:\s*([\d\.\-]+)', text, re.I)) else (round(m1_raw * 0.000125, 3) if m1_raw is not None else None)
 
-            if any(v is not None for v in [t_air, rh, lux, m1_raw, m2_raw, t_s1, t_s2]):
+            # If raw indicates disconnected/shorted sensor (<= 100), do not accept fake percentage
+            if m1_raw is not None and m1_raw <= 100:
+                m1_pct = None
+
+            # Moisture sensor 2: raw counts, estimated %, and voltage
+            m2_raw = int(m.group(1)) if (m := re.search(r'(?:Moisture\s+Sensor\s+2|MOISTURE_2).*?(?:RAW|raw)(?:\s+value)?:\s*(\d+)', text, re.I)) else None
+            m2_pct = None
+            if m := re.search(r'(?:Moisture\s+Sensor\s+2|MOISTURE_2).*?(?:percent|relative\s+moisture|estimated).*?:\s*([\d\.\-]+)', text, re.I):
+                m2_pct = float(m.group(1))
+            elif m := re.search(r'(?:Moisture\s+Sensor\s+2|MOISTURE_2)[^:\n]*:\s*([\d\.\-]+)\s*%', text, re.I):
+                m2_pct = float(m.group(1))
+
+            m2_v = float(m.group(1)) if (m := re.search(r'(?:Moisture\s+Sensor\s+2|MOISTURE_2).*?voltage:\s*([\d\.\-]+)', text, re.I)) else (round(m2_raw * 0.000125, 3) if m2_raw is not None else None)
+
+            if m2_raw is not None and m2_raw <= 100:
+                m2_pct = None
+
+            # Temperature probes
+            t_s1 = float(m.group(1)) if (m := re.search(r'(?:DS18B20\s+Probe\s+1|Soil\s+temperature\s+probe\s+1|Probe\s+1(?:\s+temp)?):\s*([\d\.\-]+)', text, re.I)) else None
+            t_s2 = float(m.group(1)) if (m := re.search(r'(?:DS18B20\s+Probe\s+2|Soil\s+temperature\s+probe\s+2|Probe\s+2(?:\s+temp)?):\s*([\d\.\-]+)', text, re.I)) else None
+
+            if any(v is not None for v in [t_air, rh, lux, m1_raw, m1_pct, m2_raw, m2_pct, t_s1, t_s2]):
                 try:
+                    f1_status = "ok" if (m1_raw is not None and m1_raw > 100) or m1_pct is not None else ("error" if m1_raw is not None and m1_raw <= 100 else "unavailable")
+                    f2_status = "ok" if (m2_raw is not None and m2_raw > 100) or m2_pct is not None else ("error" if m2_raw is not None and m2_raw <= 100 else "unavailable")
+
                     return ESP32Packet(
                         device_id=settings.device_id,
                         firmware_version="1.0.0-sketch",
@@ -244,24 +298,28 @@ def parse_text_line(raw_line: str) -> Optional[ESP32Packet]:
                                 field_id="field_1",
                                 soil_moisture_raw=m1_raw,
                                 soil_moisture_voltage=m1_v,
+                                soil_moisture=m1_pct,
                                 soil_temperature=t_s1,
                                 ds18b20_address=_discovered_probe_1,
+                                status_moisture=f1_status,
                             ),
                             "field_2": FieldSoilData(
                                 field_id="field_2",
                                 soil_moisture_raw=m2_raw,
                                 soil_moisture_voltage=m2_v,
+                                soil_moisture=m2_pct,
                                 soil_temperature=t_s2,
                                 ds18b20_address=_discovered_probe_2,
+                                status_moisture=f2_status,
                             ),
                         },
                         sensor_status={
                             "dht22": "ok" if t_air is not None else "unavailable",
                             "bh1750": "ok" if lux is not None else "unavailable",
-                            "ads1115": "ok" if m1_raw is not None or m2_raw is not None else "unavailable",
-                            "field_1_moisture": "ok" if m1_raw is not None else "unavailable",
+                            "ads1115": "ok" if (m1_raw is not None or m2_raw is not None) else "unavailable",
+                            "field_1_moisture": f1_status,
                             "field_1_temperature": "ok" if t_s1 is not None else "unavailable",
-                            "field_2_moisture": "ok" if m2_raw is not None else "unavailable",
+                            "field_2_moisture": f2_status,
                             "field_2_temperature": "ok" if t_s2 is not None else "unavailable",
                         }
                     )
@@ -275,17 +333,20 @@ def parse_serial_line(raw_line: str) -> Optional[ESP32Packet]:
     """
     Parse a raw serial line.
     Supports both:
-      1. Schema v2.0 JSON Lines (starts with '{')
-      2. Arduino IDE test sketch text blocks ('----- SENSOR READINGS -----')
+      1. Schema v2.0 JSON Lines (contains '{' and '}')
+      2. Arduino IDE test sketch text blocks ('------ SENSOR READINGS ------')
     """
     line = raw_line.strip()
     if not line:
         return None
 
-    if line.startswith("{"):
-        return parse_json_line(line)
+    if "{" in line and "}" in line:
+        pkt = parse_json_line(line)
+        if pkt:
+            return pkt
 
     return parse_text_line(line)
+
 
 
 # ─── Mock sensor mode ─────────────────────────────────────────────────────────
@@ -359,8 +420,10 @@ async def serial_reader_task() -> None:
         logger.warning("MOCK_SERIAL=true — generating fake sensor data. Disable in production!")
         while True:
             packet = _generate_mock_packet()
-            _last_packet = packet.model_dump()
-            _last_seen   = time.time()
+            pkt_dict = packet.model_dump()
+            pkt_dict["received_at"] = datetime.now(tz=timezone.utc).isoformat()
+            _last_packet   = pkt_dict
+            _last_seen     = time.time()
             _device_status = "CONNECTED"
             _current_port  = "MOCK"
             if _on_packet_cb:
@@ -373,6 +436,7 @@ async def serial_reader_task() -> None:
 
     # ── Real serial loop ──────────────────────────────────────────────────────
     logger.info("Serial reader task started.")
+    device_service.update_status("DISCONNECTED", serial_port=None)
 
     while True:
         port = resolve_port()
@@ -381,6 +445,7 @@ async def serial_reader_task() -> None:
             if _device_status != "DISCONNECTED":
                 _device_status = "DISCONNECTED"
                 _current_port  = None
+                device_service.update_status("DISCONNECTED", serial_port=None)
                 logger.warning("No ESP32 found. Retrying in 10 s...")
             await asyncio.sleep(10)
             continue
@@ -392,12 +457,21 @@ async def serial_reader_task() -> None:
                 baudrate=settings.serial_baud,
                 timeout=2.0,
             )
+            # Release hardware reset line on ESP32 DevKit auto-reset circuit
+            try:
+                ser.dtr = False
+                ser.rts = False
+            except Exception:
+                pass
             _current_port  = port
             _device_status = "CONNECTED"
+            device_service.update_status("CONNECTED", serial_port=port)
             logger.info(f"Serial connection established on {port} @ {settings.serial_baud} baud.")
         except serial.SerialException as e:
             logger.error(f"Cannot open {port}: {e}. Retrying in 10 s...")
             _device_status = "DISCONNECTED"
+            _current_port = None
+            device_service.update_status("DISCONNECTED", serial_port=None)
             await asyncio.sleep(10)
             continue
 
@@ -423,7 +497,9 @@ async def serial_reader_task() -> None:
                     f"moisture={packet.soil_moisture} temp={packet.soil_temperature} "
                     f"rh={packet.humidity} lux={packet.light_lux}"
                 )
-                _last_packet   = packet.model_dump()
+                packet_dict = packet.model_dump()
+                packet_dict["received_at"] = datetime.now(tz=timezone.utc).isoformat()
+                _last_packet   = packet_dict
                 _last_seen     = time.time()
                 _device_status = "CONNECTED"
 
@@ -445,6 +521,7 @@ async def serial_reader_task() -> None:
                 pass
             _device_status = "DISCONNECTED"
             _current_port  = None
+            device_service.update_status("DISCONNECTED", serial_port=None)
             logger.warning(f"ESP32 disconnected from {port}. Scanning for reconnection in 5 s...")
             await asyncio.sleep(5)
 

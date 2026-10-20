@@ -356,7 +356,7 @@ export const maithili: Translations = {
     "suggested4": "हमर खेत मे सामान्य सँ की भिन्न अछि?",
     "suggested5": "MARUDAM हमर खेत कोना सीखि रहल अछि?",
     "suggested6": "हमर माटिक नमीक मान के की अर्थ अछि?",
-    "errorNotConfigured": "एआई सहायक एखन धरि सेट नहि भेल अछि। कृपया OPENAI_API_KEY सेट करू।",
+    "errorNotConfigured": "एआई सहायक एखन धरि सेट नहि भेल अछि। कृपया GEMINI_API_KEY सेट करू।",
     "errorGeneral": "किछु गलत भऽ गेल। कृपया पुनः प्रयास करू।",
     "emptyState": "अपन खेतक बारे मे हमरा सँ किछु आ पूछू।"
   },

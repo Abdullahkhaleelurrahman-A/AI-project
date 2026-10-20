@@ -192,7 +192,7 @@ export const marathi: Translations = {
     suggested4: 'माझ्या शेतात सामान्यपेक्षा काय वेगळे आहे?',
     suggested5: 'MARUDAM माझे शेत कसे शिकत आहे?',
     suggested6: 'माझ्या मातीतील ओलावा मूल्याचा अर्थ काय आहे?',
-    errorNotConfigured: 'एआय असिस्टंट अद्याप कॉन्फिगर केलेला नाही. कृपया OPENAI_API_KEY सेट करा.',
+    errorNotConfigured: 'एआय असिस्टंट अद्याप कॉन्फिगर केलेला नाही. कृपया GEMINI_API_KEY सेट करा.',
     errorGeneral: 'काहीतरी चूक झाली. कृपया पुन्हा प्रयत्न करा.',
     emptyState: 'मला आपल्या शेताबद्दल काहीही विचारा.',
   },

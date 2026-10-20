@@ -141,6 +141,18 @@ async def get_context_for_device(device_id: str) -> Dict[str, Any]:
         if farm_climate_zone:
             context["climate_zone"] = farm_climate_zone
 
+        # 7. Weather Observations for Adaptive Baseline
+        if state and district:
+            try:
+                from app.services import weather_service
+                from app.config import settings
+                if settings.weather_configured:
+                    obs = await weather_service.get_weather_observations_for_baseline(district=district, state=state)
+                    if obs:
+                        context["weather_observations"] = obs
+            except Exception as w_err:
+                logger.warning(f"Failed to fetch weather observations for context: {w_err}")
+
     except Exception as e:
         logger.error(f"Error resolving India context for device {device_id}: {e}")
 

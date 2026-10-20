@@ -6,19 +6,45 @@
 // =============================================================================
 // MARUDAM ESP32 Sensor Node — Two-Field Architecture
 // =============================================================================
-// PRIMARY COMMUNICATION: USB Serial (115200 baud)
-//
-// ESP32 -> USB -> FastAPI Backend -> Supabase
+// COMMUNICATION MODES:
+//   "SERIAL" -> Pure JSON Lines over USB Serial (115200 baud)
+//               ESP32 -> USB -> FastAPI Backend -> Supabase
+//   "WIFI"   -> HTTP POST over Wi-Fi to FastAPI Backend
+//               ESP32 -> Wi-Fi -> FastAPI /api/sensors/esp32 -> Pipeline
 //
 // SERIAL OUTPUT RULES:
 //   - Exactly ONE valid JSON object per line.
 //   - Line ends with standard \n.
-//   - Absolutely NO human-readable debug text or banners on Serial.
+//   - Absolutely NO human-readable debug text on Serial in SERIAL mode.
 //   - NaN / Infinite sensor values are serialized strictly as JSON `null`.
+//
+// Wi-Fi Mode:
+//   - Connects to configured WIFI_SSID / WIFI_PASSWORD.
+//   - POSTs JSON to BACKEND_URL every SAMPLE_INTERVAL_MS.
+//   - Falls back to Serial output on POST failure.
+//   - Debug messages go to Serial (since Serial is not used for data in Wi-Fi mode).
 // =============================================================================
+
+// Conditionally include Wi-Fi libraries
+#if defined(COMMUNICATION_MODE) && (strcmp(COMMUNICATION_MODE, "WIFI") == 0 || strcmp(COMMUNICATION_MODE, "BOTH") == 0)
+  #define USE_WIFI 1
+#else
+  #define USE_WIFI 0
+#endif
+
+#if USE_WIFI
+  #include <WiFi.h>
+  #include <HTTPClient.h>
+#endif
 
 SensorManager sensors(DEVICE_ID);
 unsigned long lastSampleTime = 0;
+
+#if USE_WIFI
+  bool wifiConnected = false;
+  unsigned long lastWifiCheck = 0;
+  const unsigned long WIFI_CHECK_INTERVAL_MS = 30000; // Check Wi-Fi every 30s
+#endif
 
 // ---------------------------------------------------------------------------
 // generateJsonPayload()
@@ -110,6 +136,73 @@ String generateJsonPayload(const TwoFieldReadings& r) {
 }
 
 // ===========================================================================
+// Wi-Fi FUNCTIONS
+// ===========================================================================
+#if USE_WIFI
+
+void connectWiFi() {
+  Serial.print("[WIFI] Connecting to ");
+  Serial.print(WIFI_SSID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long startMs = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - startMs > WIFI_TIMEOUT_MS) {
+      Serial.println("\n[WIFI] Connection FAILED — timeout");
+      wifiConnected = false;
+      return;
+    }
+    delay(500);
+    Serial.print(".");
+  }
+
+  wifiConnected = true;
+  Serial.println();
+  Serial.print("[WIFI] Connected! IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+bool sendHttpPost(const String& jsonPayload) {
+  if (WiFi.status() != WL_CONNECTED) {
+    wifiConnected = false;
+    return false;
+  }
+
+  HTTPClient http;
+  http.begin(BACKEND_URL);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(5000); // 5 second timeout
+
+  int httpCode = http.POST(jsonPayload);
+
+  if (httpCode > 0) {
+    String response = http.getString();
+    Serial.printf("[WIFI] POST %d -> %s\n", httpCode, response.c_str());
+    http.end();
+    return (httpCode >= 200 && httpCode < 300);
+  } else {
+    Serial.printf("[WIFI] POST failed: %s\n", http.errorToString(httpCode).c_str());
+    http.end();
+    return false;
+  }
+}
+
+void maintainWiFi() {
+  if (millis() - lastWifiCheck > WIFI_CHECK_INTERVAL_MS) {
+    lastWifiCheck = millis();
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[WIFI] Connection lost, reconnecting...");
+      wifiConnected = false;
+      connectWiFi();
+    }
+  }
+}
+
+#endif // USE_WIFI
+
+// ===========================================================================
 // SETUP
 // ===========================================================================
 void setup() {
@@ -117,14 +210,26 @@ void setup() {
   delay(500);
 
   // Initialize all hardware drivers.
-  // Note: Diagnostic text is deliberately suppressed from Serial output.
+  // Note: Diagnostic text is deliberately suppressed from Serial output
+  // in SERIAL communication mode.
   sensors.begin();
+
+  #if USE_WIFI
+    Serial.println("[MARUDAM] Wi-Fi mode enabled");
+    Serial.print("[MARUDAM] Backend URL: ");
+    Serial.println(BACKEND_URL);
+    connectWiFi();
+  #endif
 }
 
 // ===========================================================================
 // LOOP
 // ===========================================================================
 void loop() {
+  #if USE_WIFI
+    maintainWiFi();
+  #endif
+
   if (millis() - lastSampleTime >= SAMPLE_INTERVAL_MS) {
     lastSampleTime = millis();
 
@@ -137,7 +242,14 @@ void loop() {
 
     String jsonPayload = generateJsonPayload(readings);
 
-    // ONLY pure JSON goes through USB Serial, exactly one line per reading
+    // Always output pure JSON Line to USB Serial (115200 baud)
     Serial.println(jsonPayload);
+
+    #if USE_WIFI
+      // In Wi-Fi mode or BOTH mode, also POST to backend over Wi-Fi
+      if (wifiConnected) {
+        sendHttpPost(jsonPayload);
+      }
+    #endif
   }
 }

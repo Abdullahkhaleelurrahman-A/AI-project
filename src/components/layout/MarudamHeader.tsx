@@ -52,11 +52,23 @@ export default function MarudamHeader({
 
   return (
     <header style={{ 
-      display:'flex', alignItems:'center', justifyContent:'space-between', 
-      padding:'1rem 1.5rem', background:'var(--bg-header)', 
-      borderBottom:'1px solid var(--border-brand-subtle)', 
-      backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)', 
-      position:'sticky', top:0, zIndex:40 
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between', 
+      padding: '1rem 1.5rem',
+      background: 'var(--bg-header)', 
+      borderBottom: '1px solid var(--border-brand-subtle)', 
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)', 
+      position: 'sticky',
+      top: 0,
+      left: 0,
+      right: 0,
+      width: '100%',
+      zIndex: 50,
+      flexShrink: 0,
+      alignSelf: 'stretch',
+      boxShadow: '0 2px 10px rgba(0, 0, 0, 0.04)',
     }}>
       <div style={{ display:'flex', alignItems:'center', gap:'2rem' }}>
         <MarudamLogo size={32} showWordmark wordmarkStyle={{ fontSize:'1.2rem', fontWeight:800, letterSpacing:'0.05em' }} />

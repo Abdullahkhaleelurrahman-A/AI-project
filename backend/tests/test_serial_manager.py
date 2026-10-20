@@ -171,3 +171,164 @@ class TestParseJsonLine:
         assert f2.soil_moisture_voltage == pytest.approx(2.737)
         assert f2.soil_temperature == pytest.approx(29.12)
         assert f2.ds18b20_address == "286307B3000000CC"
+
+    def test_marudam_sensor_test_sketch_format(self):
+        """Test the real physical ESP32 MARUDAM SENSOR TEST output format."""
+        from app.services.serial_manager import parse_serial_line
+        lines = [
+            "------ SENSOR READINGS ------",
+            "Moisture Sensor 1 raw: 14754",
+            "Moisture Sensor 1: 52.5% estimated",
+            "Moisture Sensor 2 raw: 14630",
+            "Moisture Sensor 2: 53.7% estimated",
+            "DS18B20 Probe 1: 30.44 C",
+            "DS18B20 Probe 2: 30.37 C",
+            "Air Temperature: 31.20 C",
+            "Air Humidity: 74.50 %",
+            "Light Intensity: 38.33 lux",
+            "-----------------------------",
+        ]
+        packet = None
+        for line in lines:
+            res = parse_serial_line(line)
+            if res:
+                packet = res
+
+        assert packet is not None
+        assert packet.shared.air_temperature == pytest.approx(31.20)
+        assert packet.shared.humidity == pytest.approx(74.50)
+        assert packet.shared.light_lux == pytest.approx(38.33)
+        assert packet.fields["field_1"].soil_moisture_raw == 14754
+        assert packet.fields["field_1"].soil_moisture == pytest.approx(52.5)
+        assert packet.fields["field_1"].soil_temperature == pytest.approx(30.44)
+        assert packet.fields["field_2"].soil_moisture_raw == 14630
+        assert packet.fields["field_2"].soil_moisture == pytest.approx(53.7)
+        assert packet.fields["field_2"].soil_temperature == pytest.approx(30.37)
+
+    def test_diagnostic_moisture_raw_format_without_percentage(self):
+        """Diagnostic sketch output with MOISTURE_1_RAW/MOISTURE_2_RAW must preserve raw values without fake percentage."""
+        from app.services.serial_manager import parse_serial_line
+        lines = [
+            "------ SENSOR READINGS ------",
+            "MOISTURE_1_RAW: 14743",
+            "Moisture Sensor 1 - A0 raw: 14743, voltage: 1.843 V",
+            "MOISTURE_2_RAW: 14621",
+            "Moisture Sensor 2 - A1 raw: 14621, voltage: 1.828 V",
+            "-----------------------------",
+        ]
+        packet = None
+        for line in lines:
+            res = parse_serial_line(line)
+            if res:
+                packet = res
+
+        assert packet is not None
+        assert packet.fields["field_1"].soil_moisture_raw == 14743
+        assert packet.fields["field_1"].soil_moisture_voltage == pytest.approx(1.843, abs=0.01)
+        assert packet.fields["field_1"].soil_moisture is None  # Uncalibrated: must NOT assume 100%!
+        assert packet.fields["field_1"].status_moisture == "ok"
+
+        assert packet.fields["field_2"].soil_moisture_raw == 14621
+        assert packet.fields["field_2"].soil_moisture_voltage == pytest.approx(1.828, abs=0.01)
+        assert packet.fields["field_2"].soil_moisture is None
+        assert packet.fields["field_2"].status_moisture == "ok"
+
+    def test_disconnected_sensor_does_not_clamp_to_100_percent(self):
+        """A disconnected sensor reading raw <= 100 must be marked as error, never reported as 100% moisture."""
+        from app.services.serial_manager import parse_serial_line
+        lines = [
+            "------ SENSOR READINGS ------",
+            "MOISTURE_1_RAW: 0",
+            "Moisture Sensor 1: 100.0% estimated",
+            "MOISTURE_2_RAW: 14621",
+            "Moisture Sensor 2: 53.7% estimated",
+            "-----------------------------",
+        ]
+        packet = None
+        for line in lines:
+            res = parse_serial_line(line)
+            if res:
+                packet = res
+
+        assert packet is not None
+        assert packet.fields["field_1"].soil_moisture is None  # Ignored fake 100%
+        assert packet.fields["field_1"].status_moisture == "error"
+        assert packet.fields["field_2"].soil_moisture == pytest.approx(53.7)
+        assert packet.fields["field_2"].status_moisture == "ok"
+
+    def test_moisture_percent_and_raw_labels(self):
+        """Must parse MOISTURE_1_PERCENT with space and MOISTURE_1_RAW without error."""
+        from app.services.serial_manager import parse_serial_line
+        lines = [
+            "------ SENSOR READINGS ------",
+            "MOISTURE_1_RAW: 8232",
+            "MOISTURE_1_PERCENT: 99.9 %",
+            "MOISTURE_2_RAW: 7936",
+            "MOISTURE_2_PERCENT: 100.0 %",
+            "Soil temperature probe 1: 27.62 C",
+            "Soil temperature probe 2: 27.69 C",
+            "Air temperature: 30.80 C",
+            "Air humidity: 77.60 %",
+            "Light intensity: 10.83 lux",
+            "-----------------------------",
+        ]
+        packet = None
+        for line in lines:
+            res = parse_serial_line(line)
+            if res:
+                packet = res
+
+        assert packet is not None
+        assert packet.fields["field_1"].soil_moisture_raw == 8232
+        assert packet.fields["field_1"].soil_moisture == pytest.approx(99.9)
+        assert packet.fields["field_1"].soil_moisture_voltage == pytest.approx(1.029, abs=0.005)
+        assert packet.fields["field_1"].soil_temperature == pytest.approx(27.62)
+
+        assert packet.fields["field_2"].soil_moisture_raw == 7936
+        assert packet.fields["field_2"].soil_moisture == pytest.approx(100.0)
+        assert packet.fields["field_2"].soil_moisture_voltage == pytest.approx(0.992, abs=0.005)
+        assert packet.fields["field_2"].soil_temperature == pytest.approx(27.69)
+
+        assert packet.shared.air_temperature == pytest.approx(30.80)
+        assert packet.shared.humidity == pytest.approx(77.60)
+        assert packet.shared.light_lux == pytest.approx(10.83)
+
+    def test_user_live_example_text_format(self):
+        """Must parse raw value, voltage, and relative moisture lines with °C symbols."""
+        from app.services.serial_manager import parse_serial_line
+        lines = [
+            "------ SENSOR READINGS ------",
+            "Moisture sensor 1 raw value: 8232",
+            "Moisture sensor 1 voltage: 1.029 V",
+            "Moisture sensor 1 relative moisture: 99.9%",
+            "Moisture sensor 2 raw value: 7936",
+            "Moisture sensor 2 voltage: 0.992 V",
+            "Moisture sensor 2 relative moisture: 100.0%",
+            "Soil temperature probe 1: 27.62°C",
+            "Soil temperature probe 2: 27.69°C",
+            "Air temperature: 30.80°C",
+            "Air humidity: 77.60%",
+            "Light intensity: 10.83 lux",
+            "-----------------------------",
+        ]
+        packet = None
+        for line in lines:
+            res = parse_serial_line(line)
+            if res:
+                packet = res
+
+        assert packet is not None
+        assert packet.fields["field_1"].soil_moisture_raw == 8232
+        assert packet.fields["field_1"].soil_moisture_voltage == pytest.approx(1.029)
+        assert packet.fields["field_1"].soil_moisture == pytest.approx(99.9)
+        assert packet.fields["field_1"].soil_temperature == pytest.approx(27.62)
+
+        assert packet.fields["field_2"].soil_moisture_raw == 7936
+        assert packet.fields["field_2"].soil_moisture_voltage == pytest.approx(0.992)
+        assert packet.fields["field_2"].soil_moisture == pytest.approx(100.0)
+        assert packet.fields["field_2"].soil_temperature == pytest.approx(27.69)
+
+        assert packet.shared.air_temperature == pytest.approx(30.80)
+        assert packet.shared.humidity == pytest.approx(77.60)
+        assert packet.shared.light_lux == pytest.approx(10.83)
+

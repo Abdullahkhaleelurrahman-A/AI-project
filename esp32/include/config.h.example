@@ -19,8 +19,9 @@
 
 // --- Communication Mode ---
 // "SERIAL" -> Output pure JSON Lines to USB Serial (115200 baud).
-// "WIFI"   -> Legacy HTTP POST fallback.
-#define COMMUNICATION_MODE "SERIAL"
+// "WIFI"   -> HTTP POST over Wi-Fi to FastAPI backend.
+// "BOTH"   -> Send over BOTH USB Serial and Wi-Fi HTTP POST simultaneously.
+#define COMMUNICATION_MODE "BOTH"
 
 // --- Sampling Interval ---
 #define SAMPLE_INTERVAL_MS 5000
@@ -52,18 +53,26 @@ static const uint8_t PROBE_ADDR_FIELD_1[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x0
 static const uint8_t PROBE_ADDR_FIELD_2[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 // --- Moisture Calibration Parameters ---
-// Set to true after measuring voltage in dry air and fully submerged in water.
-// When false, raw ADC count and voltage are transmitted safely without fabricating %.
+// When true, raw ADC count and voltage are mapped into estimated percentage (0-100%).
+// Set to false until physical air and wet calibration points have been recorded.
 #define CALIBRATE_MOISTURE       false
-#define FIELD_1_VOLT_DRY         2.80f  // Voltage in dry air
-#define FIELD_1_VOLT_WET         1.30f  // Voltage submerged in water
-#define FIELD_2_VOLT_DRY         2.80f
-#define FIELD_2_VOLT_WET         1.30f
 
-// --- Optional Wi-Fi Credentials (only used if COMMUNICATION_MODE is "WIFI") ---
+// Field 1 (A0 on ADS1115):
+#define FIELD_1_RAW_DRY          22000  // ADC count in open air
+#define FIELD_1_RAW_WET          8000   // ADC count in saturated moist soil / wet limit
+#define FIELD_1_VOLT_DRY         2.75f  // Corresponding voltage in dry air
+#define FIELD_1_VOLT_WET         1.00f  // Corresponding voltage in wet condition
+
+// Field 2 (A1 on ADS1115) - separate independent calibration:
+#define FIELD_2_RAW_DRY          22000
+#define FIELD_2_RAW_WET          8000
+#define FIELD_2_VOLT_DRY         2.75f
+#define FIELD_2_VOLT_WET         1.00f
+
+// --- Optional Wi-Fi Credentials (used when COMMUNICATION_MODE is "WIFI" or "BOTH") ---
 #define WIFI_SSID         "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD     "YOUR_WIFI_PASSWORD"
-#define BACKEND_URL       "http://192.168.1.100:8000/api/sensors/readings"
+#define BACKEND_URL       "http://10.24.82.167:8000/api/sensors/esp32"
 #define WIFI_TIMEOUT_MS   15000
 
 #endif // CONFIG_H

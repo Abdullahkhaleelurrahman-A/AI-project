@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import AppShell from '@/components/layout/AppShell';
 import { type Language, getTranslations } from '@/lib/i18n/translations';
 import { fetchReadingHistory } from '@/lib/supabase/sensors';
 import type { SensorReading } from '@/lib/supabase/sensors';
 import { getCropName, estimateGrowthStageId, getCropStageName } from '@/lib/data/db';
+import { getStoredFarmProfile, buildFarmContext, FARM_PROFILE_UPDATED_EVENT } from '@/lib/data/farmProfile';
 
 export default function HistoryClient() {
   const router = useRouter();
@@ -20,38 +21,67 @@ export default function HistoryClient() {
   const t = useMemo(() => getTranslations(language), [language]);
 
   const loadProfileAndHistory = useCallback(async () => {
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push('/login'); return; }
+    const stored = getStoredFarmProfile();
+    const devId = stored.device_id || 'FIELD_001';
+    setDeviceId(devId);
+    setFarmContext(buildFarmContext(stored, language));
 
-    const { data: profile } = await supabase.from('profiles').select('language').eq('user_id', user.id).single();
-    if (profile) setLanguage((profile.language as Language) ?? 'English');
-
-    const { data: farm } = await supabase.from('farms')
-      .select('state, district, crop_id, sowing_date, device_id')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false }).limit(1).single();
-    
-    if (farm) {
-      const devId = farm.device_id ?? 'MARUDAM-01';
-      setDeviceId(devId);
-      setFarmContext({
-        cropName: getCropName(farm.crop_id, (profile?.language as Language) ?? 'English'),
-        district: farm.district,
-        state: farm.state,
-        deviceId: devId,
-        growthStage: getCropStageName(farm.crop_id, estimateGrowthStageId(farm.crop_id, farm.sowing_date), (profile?.language as Language) ?? 'English')
-      });
-
-      const data = await fetchReadingHistory(devId, 100);
-      setHistory(data);
+    if (!isSupabaseConfigured()) {
+      setHistory([]);
+      setLoading(false);
+      return;
     }
+
+    try {
+      const supabase = createClient();
+      const { data: { user }, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !user) {
+        setHistory([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: profile } = await supabase.from('profiles').select('language').eq('user_id', user.id).single();
+      if (profile) setLanguage((profile.language as Language) ?? 'English');
+
+      const { data: farm } = await supabase.from('farms')
+        .select('state, district, crop_id, sowing_date, device_id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false }).limit(1).single();
+      
+      if (farm) {
+        const farmDevId = farm.device_id ?? 'FIELD_001';
+        setDeviceId(farmDevId);
+        setFarmContext({
+          cropName: getCropName(farm.crop_id, (profile?.language as Language) ?? 'English'),
+          district: farm.district,
+          state: farm.state,
+          deviceId: farmDevId,
+          growthStage: getCropStageName(farm.crop_id, estimateGrowthStageId(farm.crop_id, farm.sowing_date), (profile?.language as Language) ?? 'English')
+        });
+
+        const data = await fetchReadingHistory(farmDevId, 100);
+        setHistory(data);
+      }
+    } catch {}
     setLoading(false);
-  }, [router]);
+  }, [language]);
 
   useEffect(() => {
     loadProfileAndHistory();
-  }, [loadProfileAndHistory]);
+
+    const handleUpdate = () => {
+      const stored = getStoredFarmProfile();
+      setDeviceId(stored.device_id || 'FIELD_001');
+      setFarmContext(buildFarmContext(stored, language));
+    };
+    window.addEventListener(FARM_PROFILE_UPDATED_EVENT, handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener(FARM_PROFILE_UPDATED_EVENT, handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
+  }, [loadProfileAndHistory, language]);
 
   const handleLanguageChange = async (newLang: Language) => {
     setLanguage(newLang);
@@ -76,7 +106,7 @@ export default function HistoryClient() {
       pageTitle="History"
       farmContext={farmContext}
     >
-      <div className="mrd-content" style={{ maxWidth:'1200px', margin:'0 auto', width:'100%' }}>
+      <div className="mrd-content" style={{ maxWidth:'1200px', margin:'0 auto', width:'100%', padding:'clamp(1.5rem, 4vw, 2.5rem)' }}>
         <div style={{ marginBottom:'2rem' }}>
           <h1 style={{ fontSize:'2rem', fontWeight:800, margin:'0 0 0.5rem 0', color:'var(--text-primary)' }}>Sensor History</h1>
           <p style={{ color:'var(--text-muted)', margin:0 }}>Historical telemetry logs from {deviceId}</p>

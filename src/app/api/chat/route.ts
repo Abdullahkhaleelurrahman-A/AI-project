@@ -1,5 +1,5 @@
 // =============================================================================
-// Marudam — AI Chatbot Route Handler
+// Marudam — AI Chatbot Route Handler (Gemini Powered)
 // =============================================================================
 // POST /api/chat
 // Accepts: { message, language, context }
@@ -14,16 +14,73 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Lazy-initialize OpenAI so missing key gives a clear error, not a build failure
-function getOpenAIClient(): OpenAI | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || key === 'your_openai_api_key_here') return null;
-  return new OpenAI({ apiKey: key });
+function getGeminiConfig() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') return null;
+  const model = process.env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash';
+  return { apiKey, model };
+}
+
+async function callGemini(apiKey: string, model: string, systemPrompt: string, message: string): Promise<string> {
+  const modelsToTry = [model];
+  for (const alt of ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.7-flash']) {
+    if (!modelsToTry.includes(alt)) {
+      modelsToTry.push(alt);
+    }
+  }
+
+  let lastError: any = null;
+  for (const m of modelsToTry) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ text: systemPrompt }],
+          },
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: message }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: 500,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const errMsg = errJson?.error?.message || `HTTP ${res.status}`;
+        lastError = new Error(`Gemini (${m}) error: ${errMsg}`);
+        if (res.status === 503 || res.status === 404) {
+          console.warn(`[Marudam Chat] ${m} returned ${res.status}, trying fallback...`);
+          continue;
+        }
+        throw lastError;
+      }
+
+      const data = await res.json();
+      const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (reply) return reply;
+    } catch (e: any) {
+      lastError = e;
+      continue;
+    }
+  }
+
+  throw lastError || new Error('Failed to generate response from Gemini');
 }
 
 export async function POST(request: NextRequest) {
@@ -38,10 +95,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Message is required.' }, { status: 400 });
   }
 
-  const openai = getOpenAIClient();
-  if (!openai) {
+  const geminiConfig = getGeminiConfig();
+
+  if (!geminiConfig) {
     return NextResponse.json({
-      reply: 'The AI assistant is not configured yet. Please set the OPENAI_API_KEY environment variable.',
+      reply: 'The AI assistant is not configured yet. Please set the GEMINI_API_KEY environment variable.',
     });
   }
 
@@ -73,20 +131,10 @@ If the context has null/undefined values for a field the farmer asks about, say 
 `;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: message },
-      ],
-      max_tokens: 500,
-      temperature: 0.4,
-    });
-
-    const reply = response.choices[0]?.message?.content?.trim() ?? 'I was unable to generate a response. Please try again.';
+    const reply = await callGemini(geminiConfig.apiKey, geminiConfig.model, systemPrompt, message);
     return NextResponse.json({ reply });
   } catch (err) {
-    console.error('[Marudam Chat] OpenAI error:', err);
+    console.error('[Marudam Chat] AI error:', err);
     return NextResponse.json({ error: 'AI request failed. Please try again.' }, { status: 500 });
   }
 }

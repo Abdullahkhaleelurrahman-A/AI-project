@@ -2,10 +2,12 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import MarudamLogo from '@/components/brand/MarudamLogo';
 import AppShell from '@/components/layout/AppShell';
 import MarudamChat from '@/components/chatbot/MarudamChat';
+import LiveMoistureChart, { type MoistureDataPoint } from '@/components/charts/LiveMoistureChart';
+import WeatherWidget from '@/components/weather/WeatherWidget';
 
 import {
   LOCATIONS,
@@ -20,6 +22,12 @@ import {
   type Language,
   getTranslations,
 } from '@/lib/i18n/translations';
+import {
+  getStoredFarmProfile,
+  getStateForDistrict,
+  FARM_PROFILE_UPDATED_EVENT,
+  type FarmProfileData,
+} from '@/lib/data/farmProfile';
 import { recommendBaselineSchedule, detectWeatherVariability } from '@/lib/baseline/scheduler';
 import {
   fetchLatestReading,
@@ -100,8 +108,10 @@ interface FarmProfile {
 
 const DEVICE_COLOR: Record<string, string> = {
   ONLINE: '#4ade80',
+  CONNECTED: '#4ade80',
   STALE: '#facc15',
-  OFFLINE: '#f87171',
+  DISCONNECTED: '#ef4444',
+  OFFLINE: '#ef4444',
   UNKNOWN: '#94a3b8',
 };
 
@@ -109,7 +119,18 @@ export default function DashboardPage() {
   const router = useRouter();
   const [farmerName,    setFarmerName]    = useState('');
   const [language,      setLanguage]      = useState<Language>('English');
-  const [farmProfile,   setFarmProfile]   = useState<FarmProfile | null>(null);
+  const [farmProfile,   setFarmProfile]   = useState<FarmProfile | null>(() => {
+    const s = getStoredFarmProfile();
+    return {
+      name: s.name,
+      language: 'English',
+      state: s.state || getStateForDistrict(s.district),
+      district: s.district,
+      crop_id: s.crop_id,
+      sowing_date: s.sowing_date,
+      device_id: s.device_id,
+    };
+  });
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [detailsOpen,   setDetailsOpen]   = useState(false);
   const [calibrationModalOpen, setCalibrationModalOpen] = useState(false);
@@ -127,63 +148,127 @@ export default function DashboardPage() {
   const [adaptiveBaseline,setAdaptiveBaseline]= useState<FieldBaseline | null>(null);
   const [events,          setEvents]          = useState<SensorEvent[]>([]);
   const [decision,        setDecision]        = useState<DecisionData | null>(null);
-  const [deviceStatus,    setDeviceStatus]    = useState<'ONLINE'|'STALE'|'OFFLINE'|'UNKNOWN'>('UNKNOWN');
+  const [deviceStatus,    setDeviceStatus]    = useState<'ONLINE'|'CONNECTED'|'STALE'|'DISCONNECTED'|'OFFLINE'|'UNKNOWN'>('DISCONNECTED');
   const [sensorAge,       setSensorAge]       = useState(0);
   const [dataSource,      setDataSource]      = useState<DataSource>('none');
+  const [transportSource, setTransportSource] = useState<'serial'|'wifi'|null>(null);
   const [cloudDevice,     setCloudDevice]     = useState<DeviceRow | null>(null);
   const [cloudAnomalies,  setCloudAnomalies]  = useState<SupabaseAnomaly[]>([]);
   const [activeAnomalyTab, setActiveAnomalyTab] = useState<'all' | 'field_1' | 'field_2'>('all');
+  const [moistureHistory, setMoistureHistory] = useState<MoistureDataPoint[]>([]);
+  const [currentTime,     setCurrentTime]     = useState<number>(() => Date.now());
 
   const lastReadingTs = useRef<string | null>(null);
+  const isPollingRef  = useRef<boolean>(false);
   const t = useMemo(() => getTranslations(language), [language]);
 
-  // ─── Load Supabase profile ─────────────────────────────────────────────────
+  // Keep live clock updated every second for precise elapsed time displays
   useEffect(() => {
+    const clockTimer = setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => clearInterval(clockTimer);
+  }, []);
+
+  // ─── Load Supabase profile or local fallback & listen for updates ────────────
+  useEffect(() => {
+    const applyProfile = (data: FarmProfileData) => {
+      setFarmerName(data.name || 'Local Farm');
+      setFarmProfile(prev => ({
+        name: data.name || 'Local Farm',
+        language: prev?.language || language,
+        state: data.state || getStateForDistrict(data.district),
+        district: data.district,
+        crop_id: data.crop_id,
+        sowing_date: data.sowing_date,
+        device_id: data.device_id,
+      }));
+    };
+
+    const handleProfileUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<FarmProfileData>;
+      if (customEvent && customEvent.detail) {
+        applyProfile(customEvent.detail);
+      } else {
+        applyProfile(getStoredFarmProfile());
+      }
+    };
+
+    window.addEventListener(FARM_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+    window.addEventListener('storage', handleProfileUpdate);
+
     const load = async () => {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push('/login'); return; }
+      // 1. Immediately sync with local single source of truth
+      const stored = getStoredFarmProfile();
+      applyProfile(stored);
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('name, language')
-        .eq('user_id', user.id)
-        .single();
-
-      const { data: farm } = await supabase
-        .from('farms')
-        .select('state, district, crop_id, sowing_date, device_id')
-        .eq('user_id', user.id)
-        .limit(1)
-        .single();
-
-      if (profile) {
-        setFarmerName(profile.name ?? '');
-        setLanguage((profile.language as Language) ?? 'English');
+      // If Supabase is not configured, we are ready
+      if (!isSupabaseConfigured()) {
+        setProfileLoaded(true);
+        return;
       }
-      if (farm) {
-        setFarmProfile({
-          name: profile?.name ?? '',
-          language: (profile?.language as Language) ?? 'English',
-          state: farm.state,
-          district: farm.district,
-          crop_id: farm.crop_id ?? 'tomato',
-          sowing_date: farm.sowing_date,
-          device_id: farm.device_id ?? 'FIELD_001',
-        });
+
+      try {
+        const supabase = createClient();
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) {
+          applyProfile(getStoredFarmProfile());
+          setProfileLoaded(true);
+          return;
+        }
+
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('name, language')
+          .eq('user_id', user.id)
+          .single();
+
+        const { data: farm } = await supabase
+          .from('farms')
+          .select('state, district, crop_id, sowing_date, device_id')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (profile) {
+          if (profile.name) setFarmerName(profile.name);
+          if (profile.language) setLanguage((profile.language as Language) ?? 'English');
+        }
+        if (farm) {
+          const synced: FarmProfileData = {
+            name: profile?.name || stored.name,
+            crop_id: farm.crop_id ?? stored.crop_id,
+            district: farm.district ?? stored.district,
+            state: farm.state ?? stored.state,
+            sowing_date: farm.sowing_date ?? stored.sowing_date,
+            device_id: farm.device_id ?? stored.device_id,
+          };
+          applyProfile(synced);
+        }
+      } catch (err) {
+        console.warn('Supabase load error, retaining local farm profile:', err);
+        applyProfile(getStoredFarmProfile());
+      } finally {
+        setProfileLoaded(true);
       }
-      setProfileLoaded(true);
     };
     load();
-  }, [router]);
+
+    return () => {
+      window.removeEventListener(FARM_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+      window.removeEventListener('storage', handleProfileUpdate);
+    };
+  }, [language]);
 
   const handleLanguageChange = async (newLang: Language) => {
     setLanguage(newLang);
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from('profiles').update({ language: newLang }).eq('user_id', user.id);
-    }
+    if (!isSupabaseConfigured()) return;
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('profiles').update({ language: newLang }).eq('user_id', user.id);
+      }
+    } catch {}
   };
 
   // ─── Data sources ──────────────────────────────────────────────────────────
@@ -207,6 +292,41 @@ export default function DashboardPage() {
     timestamp:               r.timestamp,
   }), []);
 
+  // ── Protected atomic state updates (prevents out-of-order stale overwrites) ─
+  const applyField1Data = useCallback((reading: SupabaseSensorReading, forceLive = false) => {
+    setField1Data(prev => {
+      if (!prev || forceLive) return reading;
+      const prevT = new Date(prev.timestamp).getTime();
+      const newT = new Date(reading.timestamp).getTime();
+      const now = Date.now();
+      // If previous stored timestamp is corrupt/future (> 30s ahead of local clock), replace it immediately
+      if (!isNaN(prevT) && prevT > now + 30000) {
+        return reading;
+      }
+      if (!isNaN(prevT) && !isNaN(newT) && newT < prevT - 5000) {
+        return prev; // Ignore older out-of-order reading
+      }
+      return reading;
+    });
+  }, []);
+
+  const applyField2Data = useCallback((reading: SupabaseSensorReading, forceLive = false) => {
+    setField2Data(prev => {
+      if (!prev || forceLive) return reading;
+      const prevT = new Date(prev.timestamp).getTime();
+      const newT = new Date(reading.timestamp).getTime();
+      const now = Date.now();
+      // If previous stored timestamp is corrupt/future (> 30s ahead of local clock), replace it immediately
+      if (!isNaN(prevT) && prevT > now + 30000) {
+        return reading;
+      }
+      if (!isNaN(prevT) && !isNaN(newT) && newT < prevT - 5000) {
+        return prev; // Ignore older out-of-order reading
+      }
+      return reading;
+    });
+  }, []);
+
   // ── 1. Supabase initial fetch + Realtime subscriptions ────────────────────
   useEffect(() => {
     if (!profileLoaded) return;
@@ -218,37 +338,54 @@ export default function DashboardPage() {
         fetchDeviceStatus(deviceId),
       ]);
 
-      if (twoFields.field_1) {
-        setField1Data(twoFields.field_1);
-        setSensorData(mapSupabaseReading(twoFields.field_1));
-        lastReadingTs.current = twoFields.field_1.timestamp;
-        setSensorAge(0);
-        setDataSource('supabase');
-      }
-      if (twoFields.field_2) {
-        setField2Data(twoFields.field_2);
-      }
-
-      const activeF = twoFields.field_1 || twoFields.field_2;
-      if (activeF) {
-        setSharedEnv({
-          air_temperature: activeF.air_temperature,
-          humidity:        activeF.humidity,
-          light_lux:       activeF.light_lux,
-        });
-      }
-
       if (anomalies.length > 0) setCloudAnomalies(anomalies);
       if (device) setCloudDevice(device);
+
+      const now = Date.now();
+      const lastSeenMs = device?.last_seen ? new Date(device.last_seen).getTime() : 0;
+      const isDeviceFresh = device?.status === 'CONNECTED' && lastSeenMs > 0 && (now - lastSeenMs) < 60000;
+
+      const f1Ts = twoFields.field_1?.timestamp ? new Date(twoFields.field_1.timestamp).getTime() : 0;
+      const isReadingFresh = f1Ts > 0 && (now - f1Ts) < 60000;
+
+      if (isDeviceFresh && isReadingFresh) {
+        if (twoFields.field_1) {
+          applyField1Data(twoFields.field_1);
+          setSensorData(mapSupabaseReading(twoFields.field_1));
+          lastReadingTs.current = twoFields.field_1.timestamp;
+        }
+        if (twoFields.field_2) {
+          applyField2Data(twoFields.field_2);
+        }
+        const activeF = twoFields.field_1 || twoFields.field_2;
+        if (activeF) {
+          setSharedEnv({
+            air_temperature: activeF.air_temperature,
+            humidity:        activeF.humidity,
+            light_lux:       activeF.light_lux,
+          });
+        }
+        setSensorAge(Math.floor((now - f1Ts) / 1000));
+        setDataSource('supabase');
+        setDeviceStatus('CONNECTED');
+      } else {
+        // Historical data exists in Supabase, but ESP32 is not actively connected right now!
+        setDeviceStatus('DISCONNECTED');
+        setField1Data(null);
+        setField2Data(null);
+        setSensorData(null);
+        setSharedEnv({ air_temperature: null, humidity: null, light_lux: null });
+        setDataSource('supabase');
+      }
     };
     init();
 
     // Realtime: updates on sensor_readings
     const unsubReadings = subscribeToReadings(deviceId, (reading) => {
       if (reading.field_id === 'field_2') {
-        setField2Data(reading);
+        applyField2Data(reading);
       } else {
-        setField1Data(reading);
+        applyField1Data(reading);
         setSensorData(mapSupabaseReading(reading));
       }
       setSharedEnv({
@@ -259,6 +396,25 @@ export default function DashboardPage() {
       lastReadingTs.current = reading.timestamp;
       setSensorAge(0);
       setDataSource('supabase');
+      setDeviceStatus('CONNECTED');
+
+      const now = new Date(reading.timestamp || Date.now());
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setMoistureHistory(prev => {
+        const isF2 = reading.field_id === 'field_2';
+        const last = prev[prev.length - 1];
+        const newPoint: MoistureDataPoint = {
+          timestamp: reading.timestamp || now.toISOString(),
+          time: timeStr,
+          field1Moisture: isF2 ? (last?.field1Moisture ?? null) : (reading.soil_moisture ?? null),
+          field1Raw: isF2 ? (last?.field1Raw ?? null) : (reading.soil_moisture_raw ?? null),
+          field1Voltage: isF2 ? (last?.field1Voltage ?? null) : (reading.soil_moisture_voltage ?? null),
+          field2Moisture: isF2 ? (reading.soil_moisture ?? null) : (last?.field2Moisture ?? null),
+          field2Raw: isF2 ? (reading.soil_moisture_raw ?? null) : (last?.field2Raw ?? null),
+          field2Voltage: isF2 ? (reading.soil_moisture_voltage ?? null) : (last?.field2Voltage ?? null),
+        };
+        return [...prev.slice(-59), newPoint];
+      });
     });
 
     const unsubAnomalies = subscribeToAnomalies(deviceId, (anomaly) => {
@@ -267,6 +423,13 @@ export default function DashboardPage() {
 
     const unsubDevice = subscribeToDeviceStatus(deviceId, (device) => {
       setCloudDevice(device);
+      if (device.status === 'DISCONNECTED') {
+        setDeviceStatus('DISCONNECTED');
+        setField1Data(null);
+        setField2Data(null);
+        setSensorData(null);
+        setSharedEnv({ air_temperature: null, humidity: null, light_lux: null });
+      }
     });
 
     return () => {
@@ -274,101 +437,119 @@ export default function DashboardPage() {
       unsubAnomalies();
       unsubDevice();
     };
-  }, [profileLoaded, deviceId, mapSupabaseReading]);
+  }, [profileLoaded, deviceId, mapSupabaseReading, applyField1Data, applyField2Data]);
 
   // ── 2. Local backend polling (fallback / high-frequency dev) ───────────────
-  const fetchBackend = useCallback(async () => {
+  // Fast poll: /api/sensors/live every 2s for real-time sensor values
+  const fetchLiveSensors = useCallback(async () => {
+    if (isPollingRef.current) return;
+    isPollingRef.current = true;
     try {
-      const [compareRes, br, er, dr, st] = await Promise.allSettled([
-        fetch(`${BACKEND_URL}/api/sensors/compare/${deviceId}`),
-        fetch(`${BACKEND_URL}/api/baseline/${deviceId}`),
-        fetch(`${BACKEND_URL}/api/events/${deviceId}`),
-        fetch(`${BACKEND_URL}/api/decision/${deviceId}`),
-        fetch(`${BACKEND_URL}/api/status/${deviceId}`),
-      ]);
+      const res = await fetch(`${BACKEND_URL}/api/sensors/live`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Live endpoint ${res.status}`);
+      const d = await res.json();
 
-      if (compareRes.status === 'fulfilled' && compareRes.value.ok) {
-        const d = await compareRes.value.json();
+      if (d.history && Array.isArray(d.history) && d.history.length > 0) {
+        setMoistureHistory(d.history);
+      } else if (d.field_1 || d.field_2) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const pt: MoistureDataPoint = {
+          timestamp: now.toISOString(),
+          time: timeStr,
+          field1Moisture: d.field_1?.soil_moisture ?? null,
+          field1Raw: d.field_1?.soil_moisture_raw ?? null,
+          field1Voltage: d.field_1?.soil_moisture_voltage ?? null,
+          field2Moisture: d.field_2?.soil_moisture ?? null,
+          field2Raw: d.field_2?.soil_moisture_raw ?? null,
+          field2Voltage: d.field_2?.soil_moisture_voltage ?? null,
+        };
+        setMoistureHistory(prev => {
+          const last = prev[prev.length - 1];
+          if (last && last.field1Raw === pt.field1Raw && last.field2Raw === pt.field2Raw && last.time === pt.time) {
+            return prev;
+          }
+          return [...prev.slice(-59), pt];
+        });
+      }
+
+      if (d.connected && (d.field_1 || d.field_2)) {
         if (d.field_1) {
-          setField1Data(d.field_1);
+          applyField1Data(d.field_1, true);
           setSensorData(mapSupabaseReading(d.field_1));
+          lastReadingTs.current = d.field_1.timestamp;
         }
         if (d.field_2) {
-          setField2Data(d.field_2);
+          applyField2Data(d.field_2, true);
         }
         if (d.shared) {
           setSharedEnv(d.shared);
         }
+        if (d.source) setTransportSource(d.source === 'wifi' ? 'wifi' : 'serial');
         setDataSource('local');
-        setSensorAge(0);
+        setSensorAge(d.age_seconds ?? 0);
+        setDeviceStatus('CONNECTED');
       } else {
-        // Local backend returned non-200 — fetch fresh readings from Supabase
-        const twoFields = await fetchLatestTwoFieldReadings(deviceId);
-        if (twoFields.field_1) {
-          setField1Data(twoFields.field_1);
-          setSensorData(mapSupabaseReading(twoFields.field_1));
-          lastReadingTs.current = twoFields.field_1.timestamp;
-          setDataSource('supabase');
-          setSensorAge(0);
-        }
-        if (twoFields.field_2) {
-          setField2Data(twoFields.field_2);
-        }
-        const activeF = twoFields.field_1 || twoFields.field_2;
-        if (activeF) {
-          setSharedEnv({
-            air_temperature: activeF.air_temperature,
-            humidity:        activeF.humidity,
-            light_lux:       activeF.light_lux,
-          });
-        }
+        // ESP32 is disconnected or not transmitting fresh readings
+        setDeviceStatus('DISCONNECTED');
+        setField1Data(null);
+        setField2Data(null);
+        setSensorData(null);
+        setSharedEnv({ air_temperature: null, humidity: null, light_lux: null });
+        setTransportSource(null);
+        setDataSource('local');
+        if (d.age_seconds != null) setSensorAge(d.age_seconds);
       }
+    } catch {
+      // Backend not reachable
+      setDeviceStatus('OFFLINE');
+      setField1Data(null);
+      setField2Data(null);
+      setSensorData(null);
+      setSharedEnv({ air_temperature: null, humidity: null, light_lux: null });
+      setTransportSource(null);
+    } finally {
+      isPollingRef.current = false;
+    }
+  }, [deviceId, BACKEND_URL, mapSupabaseReading, applyField1Data, applyField2Data]);
 
+  // Slower poll: AI features (baseline, events, decision) every 5s
+  const fetchAIFeatures = useCallback(async () => {
+    try {
+      const [br, er, dr] = await Promise.allSettled([
+        fetch(`${BACKEND_URL}/api/baseline/${deviceId}`),
+        fetch(`${BACKEND_URL}/api/events/${deviceId}`),
+        fetch(`${BACKEND_URL}/api/decision/${deviceId}`),
+      ]);
       if (br.status === 'fulfilled' && br.value.ok) {
         const d = await br.value.json();
         if (Object.keys(d).length > 0) setAdaptiveBaseline(d);
       }
       if (er.status === 'fulfilled' && er.value.ok) setEvents(await er.value.json());
       if (dr.status === 'fulfilled' && dr.value.ok) setDecision(await dr.value.json());
-      if (st.status === 'fulfilled' && st.value.ok) {
-        const d = await st.value.json();
-        setDeviceStatus(d.status ?? 'UNKNOWN');
-      }
     } catch {
-      // Local backend offline — periodically query Supabase for fresh data
-      try {
-        const twoFields = await fetchLatestTwoFieldReadings(deviceId);
-        if (twoFields.field_1) {
-          setField1Data(twoFields.field_1);
-          setSensorData(mapSupabaseReading(twoFields.field_1));
-          lastReadingTs.current = twoFields.field_1.timestamp;
-          setDataSource('supabase');
-          setSensorAge(0);
-        }
-        if (twoFields.field_2) {
-          setField2Data(twoFields.field_2);
-        }
-        const activeF = twoFields.field_1 || twoFields.field_2;
-        if (activeF) {
-          setSharedEnv({
-            air_temperature: activeF.air_temperature,
-            humidity:        activeF.humidity,
-            light_lux:       activeF.light_lux,
-          });
-        }
-      } catch {
-        // Network offline
-      }
+      // AI features are optional — don't affect connection status
     }
-  }, [deviceId, BACKEND_URL, mapSupabaseReading]);
+  }, [deviceId, BACKEND_URL]);
 
+  // Fast live sensor polling (every 2 seconds)
   useEffect(() => {
     let alive = true;
-    const run = () => { if (alive) fetchBackend(); };
+    const run = () => { if (alive) fetchLiveSensors(); };
+    run();
+    const id = setInterval(run, 2000);
+    return () => { alive = false; clearInterval(id); };
+  }, [fetchLiveSensors]);
+
+  // Slower AI feature polling (every 5 seconds)
+  useEffect(() => {
+    let alive = true;
+    const run = () => { if (alive) fetchAIFeatures(); };
     run();
     const id = setInterval(run, 5000);
     return () => { alive = false; clearInterval(id); };
-  }, [fetchBackend]);
+  }, [fetchAIFeatures]);
+
 
   // Tick sensor age
   useEffect(() => {
@@ -450,11 +631,39 @@ export default function DashboardPage() {
     router.push('/login');
   };
 
-  const formatSensorAge = (sec: number): string => {
+  const formatSensorAge = useCallback((sec: number | null | undefined): string => {
+    if (sec == null || isNaN(sec)) return t.common.notAvailable ?? 'N/A';
     if (sec < 60)   return t.common.justNow;
     if (sec < 3600) return `${Math.floor(sec / 60)} ${t.common.minutes} ${t.common.ago}`;
     return `${Math.floor(sec / 3600)} ${t.common.hours} ${t.common.ago}`;
-  };
+  }, [t]);
+
+  const formatReadingTime = useCallback((ts: string | null | undefined): string => {
+    if (!ts) return 'Awaiting reading';
+    try {
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return 'Awaiting reading';
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch {
+      return 'Awaiting reading';
+    }
+  }, []);
+
+  const getReadingAgeSeconds = useCallback((ts: string | null | undefined): number | null => {
+    if (!ts) return null;
+    const timeMs = new Date(ts).getTime();
+    if (isNaN(timeMs)) return null;
+    const diffSec = Math.floor((currentTime - timeMs) / 1000);
+    // Allow slight clock drift between browser and backend (up to 15s in future) to be treated as 0s
+    if (diffSec >= -15 && diffSec < 60) {
+      return Math.max(0, diffSec);
+    }
+    // If significantly in the future (> 15s), show absolute difference rather than falsely claiming 'just now'
+    if (diffSec < -15) {
+      return Math.abs(diffSec);
+    }
+    return diffSec;
+  }, [currentTime]);
 
   const sensorLabel = (key: string): string => ({
     soil_moisture:           t.dashboard.sensorSoilMoisture,
@@ -475,9 +684,15 @@ export default function DashboardPage() {
     );
   }
 
-  const hasAnyData = !!(field1Data || field2Data || sensorData);
-  const isEspConnected = hasAnyData && sensorAge < 600; // less than 10 mins old
-  const effectiveDeviceStatus = dataSource === 'local' ? deviceStatus : (cloudDevice?.status ?? (isEspConnected ? 'ONLINE' : 'UNKNOWN'));
+  const effectiveDeviceStatus: 'ONLINE'|'CONNECTED'|'STALE'|'DISCONNECTED'|'OFFLINE'|'UNKNOWN' =
+    dataSource === 'local'
+      ? deviceStatus
+      : (cloudDevice?.status === 'CONNECTED' && cloudDevice?.last_seen && (currentTime - new Date(cloudDevice.last_seen).getTime()) < 60000
+          ? 'CONNECTED'
+          : (cloudDevice?.status === 'DISCONNECTED' ? 'DISCONNECTED' : (deviceStatus === 'OFFLINE' ? 'OFFLINE' : 'DISCONNECTED')));
+
+  const isEspConnected = effectiveDeviceStatus === 'CONNECTED' || effectiveDeviceStatus === 'ONLINE';
+  const hasAnyData = isEspConnected && !!(field1Data || field2Data || sensorData);
 
   // Filtered anomalies
   const filteredAnomalies = cloudAnomalies.filter(a => {
@@ -550,13 +765,19 @@ export default function DashboardPage() {
 
             <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.75)' }}>
               Source: <span style={{ fontWeight: 600, color: '#ffffff' }}>
-                {dataSource === 'local' ? '⚡ Local USB Serial' : dataSource === 'supabase' ? '☁️ Supabase Cloud' : 'Waiting...'}
+                {!isEspConnected
+                  ? 'Sensor disconnected'
+                  : dataSource === 'local'
+                  ? (transportSource === 'wifi' ? '📶 ESP32 Wi-Fi' : '⚡ ESP32 Serial (COM5 @ 115200)')
+                  : dataSource === 'supabase'
+                  ? '☁️ Supabase Cloud'
+                  : 'Waiting for ESP32...'}
               </span>
             </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            {sensorAge > 0 && (
+            {sensorAge > 0 && isEspConnected && (
               <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
                 {t.dashboard.updatedLabel} {formatSensorAge(sensorAge)}
               </span>
@@ -582,6 +803,63 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* ─── SENSOR DISCONNECTED / WAITING BANNER ─── */}
+        {!isEspConnected && (
+          <div style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1.5px solid rgba(239, 68, 68, 0.45)',
+            borderRadius: '0.75rem',
+            padding: '0.9rem 1.25rem',
+            color: '#fca5a5',
+            fontSize: '0.85rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            boxShadow: '0 4px 12px rgba(239, 68, 68, 0.15)',
+          }}>
+            <span style={{ fontSize: '1.4rem' }}>{effectiveDeviceStatus === 'OFFLINE' ? '⚠️' : '🔌'}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span>{effectiveDeviceStatus === 'OFFLINE' ? 'Local Backend Offline' : 'Sensor disconnected — waiting for readings'}</span>
+              </div>
+              <div style={{ fontSize: '0.78rem', color: '#fecaca', marginTop: '0.25rem', lineHeight: 1.45 }}>
+                {effectiveDeviceStatus === 'OFFLINE'
+                  ? 'FastAPI server at http://localhost:8000 is not reachable. Run python run.py to start local backend.'
+                  : 'Waiting for sensor connection. Connect ESP32 via USB cable or Wi-Fi to start receiving live readings.'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── TELEMETRY STALE ALERT BANNER (WHEN CONNECTED BUT DATA DELAYED) ─── */}
+        {isEspConnected && hasAnyData && sensorAge > 30 && (
+          <div style={{
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1.5px solid rgba(239, 68, 68, 0.45)',
+            borderRadius: '0.75rem',
+            padding: '0.9rem 1.25rem',
+            color: '#fca5a5',
+            fontSize: '0.85rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.85rem',
+            boxShadow: '0 4px 12px rgba(239, 68, 68, 0.15)',
+          }}>
+            <span style={{ fontSize: '1.4rem' }}>⚠️</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span>Telemetry Interrupted — Sensor Data Stopped Arriving</span>
+                <span style={{ fontSize: '0.7rem', padding: '0.12rem 0.5rem', borderRadius: '4px', background: 'rgba(239,68,68,0.25)', border: '1px solid rgba(239,68,68,0.4)', color: '#ffffff', fontWeight: 600 }}>
+                  Last packet {formatSensorAge(sensorAge)} ({sensorAge}s ago)
+                </span>
+              </div>
+              <div style={{ fontSize: '0.78rem', color: '#fecaca', marginTop: '0.25rem', lineHeight: 1.45 }}>
+                The backend has stopped receiving sensor packets from the ESP32 on COM5. Check USB cable connection, verify baud rate is 115200, and ensure sensor wiring is intact.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ─── SHARED ATMOSPHERIC MICROCLIMATE ─── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -604,8 +882,8 @@ export default function DashboardPage() {
                 <span style={{ fontSize: '1.1rem' }}>🌡️</span>
               </div>
               <div style={{ marginTop: '0.4rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: sharedEnv.air_temperature != null ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>
-                  {sharedEnv.air_temperature != null ? sharedEnv.air_temperature.toFixed(1) : '--'}
+                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: isEspConnected && sharedEnv.air_temperature != null ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>
+                  {isEspConnected && sharedEnv.air_temperature != null ? sharedEnv.air_temperature.toFixed(1) : '--'}
                 </span>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>°C</span>
               </div>
@@ -619,8 +897,8 @@ export default function DashboardPage() {
                 <span style={{ fontSize: '1.1rem' }}>💧</span>
               </div>
               <div style={{ marginTop: '0.4rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: sharedEnv.humidity != null ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>
-                  {sharedEnv.humidity != null ? sharedEnv.humidity.toFixed(1) : '--'}
+                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: isEspConnected && sharedEnv.humidity != null ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>
+                  {isEspConnected && sharedEnv.humidity != null ? sharedEnv.humidity.toFixed(1) : '--'}
                 </span>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>% RH</span>
               </div>
@@ -634,8 +912,8 @@ export default function DashboardPage() {
                 <span style={{ fontSize: '1.1rem' }}>☀️</span>
               </div>
               <div style={{ marginTop: '0.4rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: sharedEnv.light_lux != null ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>
-                  {sharedEnv.light_lux != null ? Math.round(sharedEnv.light_lux).toLocaleString() : '--'}
+                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: isEspConnected && sharedEnv.light_lux != null ? 'var(--text-primary)' : 'var(--text-muted)', lineHeight: 1 }}>
+                  {isEspConnected && sharedEnv.light_lux != null ? Math.round(sharedEnv.light_lux).toLocaleString() : '--'}
                 </span>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>lux</span>
               </div>
@@ -643,6 +921,14 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+
+        {/* ─── METEOROLOGICAL STATION WEATHER & 5-DAY FORECAST (OPENWEATHERMAP) ─── */}
+        <WeatherWidget
+          deviceId={deviceId}
+          district={farmProfile?.district}
+          state={farmProfile?.state}
+          backendUrl={BACKEND_URL}
+        />
 
         {/* ─── TWO ADJACENT FIELDS COMPARISON ─── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -679,9 +965,38 @@ export default function DashboardPage() {
                       ZONE 1
                     </span>
                   </div>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
                     {farmProfile?.crop_id ? `Crop: ${farmProfile.crop_id}` : 'Primary Cultivation Zone'}
-                  </span>
+                  </div>
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    marginTop: '0.35rem',
+                    padding: '0.15rem 0.5rem',
+                    borderRadius: '4px',
+                    background: isEspConnected ? 'rgba(74,222,128,0.1)' : 'rgba(239,68,68,0.1)',
+                    border: isEspConnected ? '1px solid rgba(74,222,128,0.25)' : '1px solid rgba(239,68,68,0.25)',
+                    fontSize: '0.68rem',
+                    color: isEspConnected ? '#86efac' : '#fca5a5',
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: isEspConnected ? '#4ade80' : '#ef4444', display: 'inline-block' }} />
+                    <span>
+                      {isEspConnected && field1Data?.timestamp ? (
+                        <>Last updated: <strong style={{ color: '#ffffff', fontFamily: 'monospace' }}>{formatReadingTime(field1Data.timestamp)}</strong></>
+                      ) : (
+                        'Waiting for sensor connection'
+                      )}
+                    </span>
+                    {isEspConnected && field1Data?.timestamp && (() => {
+                      const age = getReadingAgeSeconds(field1Data.timestamp);
+                      return age != null ? (
+                        <span style={{ opacity: 0.8, fontSize: '0.64rem' }}>
+                          ({formatSensorAge(age)})
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
                 </div>
 
                 <div style={{ textAlign: 'right' }}>
@@ -698,48 +1013,62 @@ export default function DashboardPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 {/* Soil Moisture */}
                 <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: '0.625rem', padding: '0.85rem' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>Soil Moisture</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                      Relative Moisture Estimate
+                    </span>
+                    <span style={{ fontSize: '0.85rem' }}>💧</span>
+                  </div>
                   <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                    {field1Data?.soil_moisture != null ? (
+                    {isEspConnected && field1Data?.soil_moisture != null ? (
                       <>
-                        <span style={{ fontSize: '1.45rem', fontWeight: 700, color: '#4ade80' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 700, color: '#4ade80' }}>
                           {field1Data.soil_moisture.toFixed(1)}
                         </span>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>%</span>
                       </>
                     ) : (
-                      <div>
-                        <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#facc15' }}>
-                          {field1Data?.soil_moisture_voltage != null ? `${field1Data.soil_moisture_voltage.toFixed(2)} V` : '--'}
-                        </div>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-faint)' }}>
-                          {field1Data?.soil_moisture_raw != null ? `${field1Data.soil_moisture_raw} counts` : 'No reading'}
-                        </span>
-                      </div>
+                      <span style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-muted)' }}>--</span>
                     )}
                   </div>
-                  <div style={{ marginTop: '0.35rem' }}>
-                    {field1Data?.soil_moisture != null ? (
-                      <span style={{ fontSize: '0.65rem', color: '#4ade80', fontWeight: 600 }}>● Calibrated</span>
-                    ) : (
-                      <span style={{ fontSize: '0.62rem', color: '#facc15', background: 'rgba(250,204,21,0.12)', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>
-                        Raw (Uncalibrated)
-                      </span>
-                    )}
+                  <div style={{ fontSize: '0.62rem', color: 'var(--text-faint)', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                    Calibrated index (0–100%), not direct volumetric water content
+                  </div>
+                  <div style={{
+                    marginTop: '0.5rem',
+                    paddingTop: '0.4rem',
+                    borderTop: '1px solid rgba(255,255,255,0.08)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.15rem',
+                    fontSize: '0.66rem',
+                    fontFamily: 'monospace',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Raw ADC:</span>
+                      <strong style={{ color: '#ffffff' }}>{isEspConnected ? (field1Data?.soil_moisture_raw ?? '--') : '--'}</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Voltage:</span>
+                      <strong style={{ color: '#a3e635' }}>{isEspConnected && field1Data?.soil_moisture_voltage != null ? `${field1Data.soil_moisture_voltage.toFixed(3)} V` : '--'}</strong>
+                    </div>
                   </div>
                 </div>
 
                 {/* Soil Temperature */}
                 <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: '0.625rem', padding: '0.85rem' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>Soil Temperature</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>Soil Temperature</span>
+                    <span style={{ fontSize: '0.85rem' }}>🌡️</span>
+                  </div>
                   <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                    <span style={{ fontSize: '1.45rem', fontWeight: 700, color: field1Data?.soil_temperature != null ? '#ffffff' : 'var(--text-muted)' }}>
-                      {field1Data?.soil_temperature != null ? field1Data.soil_temperature.toFixed(1) : '--'}
+                    <span style={{ fontSize: '1.5rem', fontWeight: 700, color: isEspConnected && field1Data?.soil_temperature != null ? '#ffffff' : 'var(--text-muted)' }}>
+                      {isEspConnected && field1Data?.soil_temperature != null ? field1Data.soil_temperature.toFixed(2) : '--'}
                     </span>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>°C</span>
                   </div>
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-faint)', marginTop: '0.35rem', display: 'block' }}>
-                    DS18B20 OneWire Bus
+                    DS18B20 Probe 1 (GPIO 4)
                   </span>
                 </div>
               </div>
@@ -747,8 +1076,8 @@ export default function DashboardPage() {
               {/* Status and Baseline note */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
                 <span>Root-zone status:</span>
-                <span style={{ fontWeight: 600, color: '#4ade80' }}>
-                  {field1Data?.soil_temperature != null ? 'Normal · Active' : 'Awaiting data'}
+                <span style={{ fontWeight: 600, color: isEspConnected && field1Data?.soil_temperature != null ? '#4ade80' : 'var(--text-muted)' }}>
+                  {isEspConnected && field1Data?.soil_temperature != null ? 'Normal · Active' : 'Waiting for sensor connection'}
                 </span>
               </div>
             </div>
@@ -772,9 +1101,38 @@ export default function DashboardPage() {
                       ZONE 2
                     </span>
                   </div>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    Adjacent Agricultural Plot
-                  </span>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
+                    Crop: brinjal
+                  </div>
+                  <div style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    marginTop: '0.35rem',
+                    padding: '0.15rem 0.5rem',
+                    borderRadius: '4px',
+                    background: isEspConnected ? 'rgba(59,130,246,0.1)' : 'rgba(239,68,68,0.1)',
+                    border: isEspConnected ? '1px solid rgba(59,130,246,0.25)' : '1px solid rgba(239,68,68,0.25)',
+                    fontSize: '0.68rem',
+                    color: isEspConnected ? '#93c5fd' : '#fca5a5',
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: isEspConnected ? '#60a5fa' : '#ef4444', display: 'inline-block' }} />
+                    <span>
+                      {isEspConnected && field2Data?.timestamp ? (
+                        <>Last updated: <strong style={{ color: '#ffffff', fontFamily: 'monospace' }}>{formatReadingTime(field2Data.timestamp)}</strong></>
+                      ) : (
+                        'Waiting for sensor connection'
+                      )}
+                    </span>
+                    {isEspConnected && field2Data?.timestamp && (() => {
+                      const age = getReadingAgeSeconds(field2Data.timestamp);
+                      return age != null ? (
+                        <span style={{ opacity: 0.8, fontSize: '0.64rem' }}>
+                          ({formatSensorAge(age)})
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
                 </div>
 
                 <div style={{ textAlign: 'right' }}>
@@ -791,48 +1149,62 @@ export default function DashboardPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 {/* Soil Moisture */}
                 <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: '0.625rem', padding: '0.85rem' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>Soil Moisture</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                      Relative Moisture Estimate
+                    </span>
+                    <span style={{ fontSize: '0.85rem' }}>💧</span>
+                  </div>
                   <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                    {field2Data?.soil_moisture != null ? (
+                    {isEspConnected && field2Data?.soil_moisture != null ? (
                       <>
-                        <span style={{ fontSize: '1.45rem', fontWeight: 700, color: '#60a5fa' }}>
+                        <span style={{ fontSize: '1.5rem', fontWeight: 700, color: '#60a5fa' }}>
                           {field2Data.soil_moisture.toFixed(1)}
                         </span>
                         <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>%</span>
                       </>
                     ) : (
-                      <div>
-                        <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#facc15' }}>
-                          {field2Data?.soil_moisture_voltage != null ? `${field2Data.soil_moisture_voltage.toFixed(2)} V` : '--'}
-                        </div>
-                        <span style={{ fontSize: '0.65rem', color: 'var(--text-faint)' }}>
-                          {field2Data?.soil_moisture_raw != null ? `${field2Data.soil_moisture_raw} counts` : 'No reading'}
-                        </span>
-                      </div>
+                      <span style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--text-muted)' }}>--</span>
                     )}
                   </div>
-                  <div style={{ marginTop: '0.35rem' }}>
-                    {field2Data?.soil_moisture != null ? (
-                      <span style={{ fontSize: '0.65rem', color: '#60a5fa', fontWeight: 600 }}>● Calibrated</span>
-                    ) : (
-                      <span style={{ fontSize: '0.62rem', color: '#facc15', background: 'rgba(250,204,21,0.12)', padding: '0.1rem 0.35rem', borderRadius: '4px', fontWeight: 600 }}>
-                        Raw (Uncalibrated)
-                      </span>
-                    )}
+                  <div style={{ fontSize: '0.62rem', color: 'var(--text-faint)', marginTop: '0.2rem', lineHeight: 1.25 }}>
+                    Calibrated index (0–100%), not direct volumetric water content
+                  </div>
+                  <div style={{
+                    marginTop: '0.5rem',
+                    paddingTop: '0.4rem',
+                    borderTop: '1px solid rgba(255,255,255,0.08)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.15rem',
+                    fontSize: '0.66rem',
+                    fontFamily: 'monospace',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Raw ADC:</span>
+                      <strong style={{ color: '#ffffff' }}>{isEspConnected ? (field2Data?.soil_moisture_raw ?? '--') : '--'}</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)' }}>
+                      <span>Voltage:</span>
+                      <strong style={{ color: '#60a5fa' }}>{isEspConnected && field2Data?.soil_moisture_voltage != null ? `${field2Data.soil_moisture_voltage.toFixed(3)} V` : '--'}</strong>
+                    </div>
                   </div>
                 </div>
 
                 {/* Soil Temperature */}
                 <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: '0.625rem', padding: '0.85rem' }}>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>Soil Temperature</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-muted)' }}>Soil Temperature</span>
+                    <span style={{ fontSize: '0.85rem' }}>🌡️</span>
+                  </div>
                   <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'baseline', gap: '0.2rem' }}>
-                    <span style={{ fontSize: '1.45rem', fontWeight: 700, color: field2Data?.soil_temperature != null ? '#ffffff' : 'var(--text-muted)' }}>
-                      {field2Data?.soil_temperature != null ? field2Data.soil_temperature.toFixed(1) : '--'}
+                    <span style={{ fontSize: '1.5rem', fontWeight: 700, color: isEspConnected && field2Data?.soil_temperature != null ? '#ffffff' : 'var(--text-muted)' }}>
+                      {isEspConnected && field2Data?.soil_temperature != null ? field2Data.soil_temperature.toFixed(2) : '--'}
                     </span>
                     <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>°C</span>
                   </div>
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-faint)', marginTop: '0.35rem', display: 'block' }}>
-                    DS18B20 OneWire Bus
+                    DS18B20 Probe 2 (GPIO 4)
                   </span>
                 </div>
               </div>
@@ -840,14 +1212,32 @@ export default function DashboardPage() {
               {/* Status and Baseline note */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
                 <span>Root-zone status:</span>
-                <span style={{ fontWeight: 600, color: '#60a5fa' }}>
-                  {field2Data?.soil_temperature != null ? 'Normal · Active' : 'Awaiting data'}
+                <span style={{ fontWeight: 600, color: isEspConnected && field2Data?.soil_temperature != null ? '#60a5fa' : 'var(--text-muted)' }}>
+                  {isEspConnected && field2Data?.soil_temperature != null ? 'Normal · Active' : 'Waiting for sensor connection'}
                 </span>
               </div>
             </div>
 
           </div>
         </div>
+
+        {/* ─── REAL-TIME DUAL SOIL MOISTURE DYNAMICS CHART ─── */}
+        <LiveMoistureChart
+          history={moistureHistory}
+          field1Name={farmProfile?.crop_id ? `Field 1 (${farmProfile.crop_id})` : 'Field 1 (A0)'}
+          field2Name="Field 2 (A1)"
+          liveF1={{
+            moisture: isEspConnected ? (field1Data?.soil_moisture ?? null) : null,
+            raw: isEspConnected ? (field1Data?.soil_moisture_raw ?? null) : null,
+            voltage: isEspConnected ? (field1Data?.soil_moisture_voltage ?? null) : null,
+          }}
+          liveF2={{
+            moisture: isEspConnected ? (field2Data?.soil_moisture ?? null) : null,
+            raw: isEspConnected ? (field2Data?.soil_moisture_raw ?? null) : null,
+            voltage: isEspConnected ? (field2Data?.soil_moisture_voltage ?? null) : null,
+          }}
+          isConnected={isEspConnected}
+        />
 
         {/* ─── INSIGHTS & ANOMALIES SECTION ─── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)', gap: '1.5rem', alignItems: 'start' }}>

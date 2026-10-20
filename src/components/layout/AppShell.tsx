@@ -20,9 +20,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import MarudamLogo from '@/components/brand/MarudamLogo';
 import MarudamSelect from '@/components/ui/MarudamSelect';
 import { type Language, getTranslations } from '@/lib/i18n/translations';
+import {
+  getStoredFarmProfile,
+  buildFarmContext,
+  FARM_PROFILE_UPDATED_EVENT,
+  type FarmProfileData,
+} from '@/lib/data/farmProfile';
 
 // ─── Route config ─────────────────────────────────────────────────────────────
 // Every entry navigates to a real page.
@@ -129,6 +136,25 @@ export default function AppShell({
     localStorage.setItem('marudam-theme', newTheme);
   };
 
+  useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      router.push('/login');
+      return;
+    }
+    try {
+      const supabase = createClient();
+      supabase.auth.getUser().then(({ data: { user } }) => {
+        if (!user) {
+          router.push('/login');
+        }
+      }).catch(() => {
+        router.push('/login');
+      });
+    } catch {
+      router.push('/login');
+    }
+  }, [router]);
+
   const navigate = useCallback((route: string) => {
     router.push(route);
   }, [router]);
@@ -146,6 +172,38 @@ export default function AppShell({
     document.documentElement.dir = isRTL ? 'rtl' : 'ltr';
     document.documentElement.setAttribute('data-lang', language);
   }, [language, isRTL]);
+
+  const [profile, setProfile] = useState<FarmProfileData>(() => getStoredFarmProfile());
+
+  useEffect(() => {
+    // Synchronize stored farm profile upon client mount
+    setProfile(getStoredFarmProfile());
+
+    const handleProfileUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<FarmProfileData>;
+      if (customEvent && customEvent.detail) {
+        setProfile(customEvent.detail);
+      } else {
+        setProfile(getStoredFarmProfile());
+      }
+    };
+
+    window.addEventListener(FARM_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+    window.addEventListener('storage', handleProfileUpdate);
+    return () => {
+      window.removeEventListener(FARM_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+      window.removeEventListener('storage', handleProfileUpdate);
+    };
+  }, []);
+
+  const dynamicContext = buildFarmContext(profile, language);
+  const activeFarm = {
+    cropName: dynamicContext.cropName,
+    growthStage: dynamicContext.growthStage,
+    district: dynamicContext.district,
+    state: dynamicContext.state,
+    deviceId: farmContext?.deviceId || dynamicContext.deviceId,
+  };
 
   return (
     <div style={{
@@ -223,33 +281,31 @@ export default function AppShell({
         </nav>
 
         {/* Farm context card */}
-        {farmContext && (
-          <div style={{
-            margin: '0 0.75rem 1rem',
-            padding: '0.875rem',
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border-very-subtle)',
-            borderRadius: '0.75rem',
-          }}>
-            <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.625rem' }}>
-              YOUR FARM
-            </div>
-            {[
-              { label: 'Crop',     value: farmContext.cropName },
-              { label: 'Stage',    value: farmContext.growthStage },
-              { label: 'District', value: farmContext.district },
-              { label: 'State',    value: farmContext.state },
-              { label: 'Device',   value: farmContext.deviceId },
-            ].map(({ label, value }) => value ? (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.3rem' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', flexShrink: 0 }}>{label}</span>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 500, textAlign: 'right', maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={value}>
-                  {value}
-                </span>
-              </div>
-            ) : null)}
+        <div style={{
+          margin: '0 0.75rem 1rem',
+          padding: '0.875rem',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-very-subtle)',
+          borderRadius: '0.75rem',
+        }}>
+          <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.625rem' }}>
+            YOUR FARM
           </div>
-        )}
+          {[
+            { label: 'Crop',     value: activeFarm.cropName },
+            { label: 'Stage',    value: activeFarm.growthStage },
+            { label: 'District', value: activeFarm.district },
+            { label: 'State',    value: activeFarm.state },
+            { label: 'Field ID', value: activeFarm.deviceId },
+          ].map(({ label, value }) => value ? (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.3rem' }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', flexShrink: 0 }}>{label}</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 500, textAlign: 'right', maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={value}>
+                {value}
+              </span>
+            </div>
+          ) : null)}
+        </div>
       </aside>
 
       {/* ══════ MAIN CONTENT AREA ══════════════════════════════════════════ */}
@@ -259,14 +315,18 @@ export default function AppShell({
           style={{
             position: 'sticky',
             top: 0,
-            zIndex: 15,
+            zIndex: 30,
+            width: '100%',
+            flexShrink: 0,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '0.75rem 1.75rem',
             background: 'var(--bg-panel)',
             borderBottom: '1px solid var(--border-subtle)',
-            backdropFilter: 'blur(8px)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.04)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

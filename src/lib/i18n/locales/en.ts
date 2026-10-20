@@ -192,7 +192,7 @@ export const en: Translations = {
     suggested4: 'What is different from normal in my field?',
     suggested5: 'How is Marudam learning my field?',
     suggested6: 'What does my soil moisture value mean?',
-    errorNotConfigured: 'The AI assistant is not configured yet. Please set the OPENAI_API_KEY.',
+    errorNotConfigured: 'The AI assistant is not configured yet. Please set the GEMINI_API_KEY.',
     errorGeneral: 'Something went wrong. Please try again.',
     emptyState: 'Ask me anything about your field.',
   },
